@@ -2,40 +2,84 @@
 import
   std/[os, osproc, parseopt,envvars,strutils,paths,dirs,files,tables,dynlib,times],
   mummy, mummy/routers
+export mummy except request, respond
 
-export mummy
-
-# create actual mummy routes from request handlers in dll dynamically
-# wrap global mummy router for load/unload logic
-# allow disable time check, perhaps granually
-# .nim files in www contain get(request), post(request) or request(request) by convention which are loaded into routes
-
-# pharao nim file include
-
-proc NimMain() {.cdecl, importc.}
-
-proc library_init() {.exportc, dynlib, cdecl.} =
-  NimMain()
-  echo "Hello from our dynamic library!"
-
-proc library_do_something(arg: cint): cint {.exportc, dynlib, cdecl.} =
-  echo "We got the argument ", arg
-  echo "Returning 0 to indicate that everything went fine!"
-  return 0 # This will be automatically converted to a cint
-
-proc library_deinit() {.exportc, dynlib, cdecl.} =
-  GC_FullCollect()
-
+# shared code
 type
-  PharaoRouteObj = object
-    path: string
-    requestHandler: proc(request: Request)
-    libHandle: LibHandle
-    libModificationTime: Time
-  PharaoRoute = ref PharaoRouteObj
+  RespondProc = proc(request: Request, code: int, headers: sink HttpHeaders, body: sink string) {.nimcall,gcsafe.}
+  RequestProc = proc(request: Request) {.nimcall,gcsafe.}
+  InitProc = proc(respondProcArg: RespondProc) {.nimcall,gcsafe.}
+
+# boilerplate to import in .nim file in web root
+when not isMainModule:
+  
+  # dynlib boilerplate
+  proc NimMain() {.cdecl, importc.}
+  proc library_init() {.exportc, dynlib, cdecl.} =
+    NimMain()
+  proc library_deinit() {.exportc, dynlib, cdecl.} =
+    GC_FullCollect()
+ 
+  #  interface
+  var
+    respondProc: RespondProc
+
+  proc init(respondProcArg: RespondProc) {.exportc, dynlib.} =
+    respondProc = respondProcArg
+
+  proc respond*(request: Request, code: int, headers: sink HttpHeaders, body: sink string) =
+    respondProc(request, code, headers, body)
+
+  template entomb*() =
+    mixin get, post, put, head, delete, options, patch
+    proc request*(request: Request) {.exportc, dynlib.} =
+      case request.httpMethod:
+      of "GET":
+        when compiles(get(request)):
+          get(request)
+          return
+      of "POST":
+        when compiles(post(request)):
+          post(request)
+          return
+      of "PUT":
+        when compiles(put(request)):
+          put(request)
+          return
+      of "HEAD":
+        when compiles(head(request)):
+          head(request)
+          return
+      of "DELETE":
+        when compiles(delete(request)):
+          delete(request)
+          return
+      of "OPTIONS":
+        when compiles(options(request)):
+          options(request)
+          return
+      of "PATCH":
+        when compiles(patch(request)):
+          patch(request)
+          return
+
+      when compiles(request(request)):
+        request(request)
+        return
+      pharao.respond(request, 405, @{"Content-Type": "text/plain"}.HttpHeaders, "Method not allowed")
 
 when isMainModule:
+
+  type
+    PharaoRouteObj = object
+      path: string
+      requestProc: RequestProc
+      libHandle: LibHandle
+      libModificationTime: Time
+    PharaoRoute = ref PharaoRouteObj
+
   # pharao server
+  # handle requests, compile .nim file in web root to dynlib and load
 
   proc usage() =
     echo "Invalid option or argument, run with optoin --help for more information"
@@ -94,10 +138,6 @@ PHARAOH_LOG_ERRORS       true
     createDir(dynlibRoot)
 
     proc handler(request: Request) =
-      echo request.path
-      echo request.httpMethod
-      echo request.headers
-
       let sourcePath = wwwRoot / request.path
       let (dir, name, _) = request.path.splitFile
       if fileExists(sourcePath):
@@ -109,12 +149,25 @@ PHARAOH_LOG_ERRORS       true
           createDir(dynlibPath.parentDir)
           let cmd = "$# c --nimcache:$# --app:lib --d:useMalloc -o:$# $#" % [nimCmd, nimCachePath, dynlibPath, sourcePath]
           let (output, exitCode) = execCmdEx(cmd)
-          if exitCode == 0:
-            route.libModificationTime = dynlibPath.getLastModificationTime
-          else:
+          if exitCode != 0:
             request.respond(500, emptyHttpHeaders(), output)
             return
-        request.respond(200, emptyHttpHeaders(), "ok")
+          route.libHandle = loadLib(dynlibPath)
+          let init = cast[InitProc](route.libHandle.symAddr("init"))
+          init(respond)
+          if init.isNil:
+            let error = "Could not find proc init in $#, please import module pharao\n" % sourcePath
+            route.libHandle.unloadLib
+            request.respond(500, emptyHttpHeaders(), error)
+            return
+          route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
+          if route.requestProc.isNil:
+            let error = "Could not find proc request in $#, please import module pharao\n" % sourcePath
+            route.libHandle.unloadLib
+            request.respond(500, emptyHttpHeaders(), error)
+            return
+          route.libModificationTime = dynlibPath.getLastModificationTime
+        route.requestProc(request)
       else:
         request.respond(404, emptyHttpHeaders(), "not found")
 

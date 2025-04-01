@@ -10,72 +10,49 @@ type
   RequestProc = proc(request: Request) {.nimcall,gcsafe.}
   InitProc = proc(respondProcArg: RespondProc) {.nimcall,gcsafe.}
 
+# This is like a custom pragma {.pragma: .} but those can't be imported from other modules 
+template entomb(body: untyped) =
+  {.push exportc, dynlib, nimcall, gcsafe .}
+  body
+  {.pop.}
+
 # boilerplate to import in .nim file in web root
 when not isMainModule:
-  
-  # dynlib boilerplate
+  # simpler pragma
+
+  # dynlib interface
   proc NimMain() {.cdecl, importc.}
   proc library_init() {.exportc, dynlib, cdecl.} =
     NimMain()
   proc library_deinit() {.exportc, dynlib, cdecl.} =
     GC_FullCollect()
+  
+  proc init(respondProc: RespondProc) {.entomb.} =
+    respond = respondProc
  
   #  interface
   var
-    respondProc: RespondProc
+    respond*: RespondProc
 
-  proc init(respondProcArg: RespondProc) {.exportc, dynlib.} =
-    respondProc = respondProcArg
 
-  proc respond*(request: Request, code: int, headers: sink HttpHeaders, body: sink string) =
-    respondProc(request, code, headers, body)
-
-  template entomb*() =
-    mixin get, post, put, head, delete, options, patch
-    proc request*(request: Request) {.exportc, dynlib.} =
-      case request.httpMethod:
-      of "GET":
-        when compiles(get(request)):
-          get(request)
-          return
-      of "POST":
-        when compiles(post(request)):
-          post(request)
-          return
-      of "PUT":
-        when compiles(put(request)):
-          put(request)
-          return
-      of "HEAD":
-        when compiles(head(request)):
-          head(request)
-          return
-      of "DELETE":
-        when compiles(delete(request)):
-          delete(request)
-          return
-      of "OPTIONS":
-        when compiles(options(request)):
-          options(request)
-          return
-      of "PATCH":
-        when compiles(patch(request)):
-          patch(request)
-          return
-
-      when compiles(request(request)):
-        request(request)
-        return
-      pharao.respond(request, 405, @{"Content-Type": "text/plain"}.HttpHeaders, "Method not allowed")
+  #proc respond*(request: Request, code: int, headers: sink HttpHeaders, body: sink string) =
+  #  respondProc(request, code, headers, body)
 
 when isMainModule:
 
   type
     PharaoRouteObj = object
       path: string
-      requestProc: RequestProc
       libHandle: LibHandle
       libModificationTime: Time
+      getProc: RequestProc
+      postProc: RequestProc
+      headProc: RequestProc
+      optionsProc: RequestProc
+      putProc: RequestProc
+      deleteProc: RequestProc
+      patchProc: RequestProc
+      requestProc: RequestProc
     PharaoRoute = ref PharaoRouteObj
 
   # pharao server
@@ -140,6 +117,7 @@ PHARAOH_LOG_ERRORS       true
     proc handler(request: Request) =
       let sourcePath = wwwRoot / request.path
       let (dir, name, _) = request.path.splitFile
+      let defaultHeaders = @{"Content-Type": "text/plain"}.HttpHeaders
       if fileExists(sourcePath):
 
         var route = routes.mgetOrPut(request.path, PharaoRoute(path: request.path))
@@ -150,7 +128,7 @@ PHARAOH_LOG_ERRORS       true
           let cmd = "$# c --nimcache:$# --app:lib --d:useMalloc -o:$# $#" % [nimCmd, nimCachePath, dynlibPath, sourcePath]
           let (output, exitCode) = execCmdEx(cmd)
           if exitCode != 0:
-            request.respond(500, emptyHttpHeaders(), output)
+            request.respond(500, defaultHeaders, output)
             return
           route.libHandle = loadLib(dynlibPath)
           let init = cast[InitProc](route.libHandle.symAddr("init"))
@@ -158,18 +136,57 @@ PHARAOH_LOG_ERRORS       true
           if init.isNil:
             let error = "Could not find proc init in $#, please import module pharao\n" % sourcePath
             route.libHandle.unloadLib
-            request.respond(500, emptyHttpHeaders(), error)
+            request.respond(500, defaultHeaders, error)
             return
+          route.getProc = cast[RequestProc](route.libHandle.symAddr("get"))
+          route.postProc = cast[RequestProc](route.libHandle.symAddr("post"))
+          route.headProc = cast[RequestProc](route.libHandle.symAddr("head"))
+          route.optionsProc = cast[RequestProc](route.libHandle.symAddr("options"))
+          route.putProc = cast[RequestProc](route.libHandle.symAddr("put"))
+          route.deleteProc = cast[RequestProc](route.libHandle.symAddr("delete"))
+          route.patchProc = cast[RequestProc](route.libHandle.symAddr("patch"))
           route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
-          if route.requestProc.isNil:
-            let error = "Could not find proc request in $#, please import module pharao\n" % sourcePath
-            route.libHandle.unloadLib
-            request.respond(500, emptyHttpHeaders(), error)
-            return
           route.libModificationTime = dynlibPath.getLastModificationTime
-        route.requestProc(request)
+       
+        block byMethod:
+          case request.httpMethod:
+          of "GET":
+            if not route.getProc.isNil:
+              route.getProc(request)
+              break byMethod
+          of "POST":
+            if not route.postProc.isNil:
+              route.postProc(request)
+              break byMethod
+          of "HEAD":
+            if not route.headProc.isNil:
+              route.headProc(request)
+              break byMethod
+          of "OPTIONS":
+            if not route.optionsProc.isNil:
+              route.optionsProc(request)
+              break byMethod
+          of "PUT":
+            if not route.putProc.isNil:
+              route.putProc(request)
+              break byMethod
+          of "DELETE":
+            if not route.deleteProc.isNil:
+              route.deleteProc(request)
+              break byMethod
+          of "PATCH":
+            if not route.patchProc.isNil:
+              route.patchProc(request)
+              break byMethod
+
+          if not route.requestProc.isNil:
+            route.requestProc(request)
+            break byMethod
+
+          request.respond(405, defaultHeaders, "method not allowed")
+
       else:
-        request.respond(404, emptyHttpHeaders(), "not found")
+        request.respond(404, defaultHeaders, "not found")
 
     let server = newServer(handler)
     server.serve(port, host)

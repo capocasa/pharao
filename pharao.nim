@@ -1,24 +1,33 @@
 
+when not defined(useMalloc):
+  {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
+
 import
-  std/[os, osproc, parseopt,envvars,strutils,paths,dirs,files,tables,dynlib,times],
+  std/[os, osproc, parseopt,envvars,strutils,paths,dirs,files,tables,dynlib,times,macros],
   mummy, mummy/routers
 export mummy except request, respond
 
-# shared code
+## shared code
 type
   RespondProc = proc(request: Request, code: int, headers: sink HttpHeaders, body: sink string) {.nimcall,gcsafe.}
-  RequestProc = proc(request: Request) {.nimcall,gcsafe.}
-  InitProc = proc(respondProcArg: RespondProc) {.nimcall,gcsafe.}
+  RequestProc = proc(request: Request, respondProc: RespondProc) {.nimcall,gcsafe.}
 
-# This is like a custom pragma {.pragma: .} but those can't be imported from other modules 
-template entomb(body: untyped) =
-  {.push exportc, dynlib, nimcall, gcsafe .}
-  body
-  {.pop.}
 
-# boilerplate to import in .nim file in web root
-when not isMainModule:
-  # simpler pragma
+## Pharao dynamic library.
+#
+# This is compiled to a dynamic library by the pharao server
+# when a source file is updated. It provides the library
+# interface to receive the request from the server and send the
+# response, and some variables and utilities as an interface for the source file.
+#
+when isMainModule and appType == "lib":
+
+  # set the include file passed from server at dynamic lib compile time
+  const sourcePath {.strdefine: "pharaoh.sourcePath".} = ""
+  when sourcePath == "":
+    {.error: "Pharaoh dynamic library requires a source path, please let pharoh server compile it".}
+  macro includeFromString(str: static[string]) =
+    newNimNode(nnkIncludeStmt).add(newIdentNode(str))
 
   # dynlib interface
   proc NimMain() {.cdecl, importc.}
@@ -26,32 +35,32 @@ when not isMainModule:
     NimMain()
   proc library_deinit() {.exportc, dynlib, cdecl.} =
     GC_FullCollect()
+
+  proc request*(request: Request, respondProc: RespondProc) {.exportc, dynlib.} =
+    var
+      code = 200
+      headers = @{"Content-Type":"text/html"}.HttpHeaders
+      body = "" 
   
-  proc init(respondProc: RespondProc) {.entomb.} =
-    respond = respondProc
- 
-  #  interface
-  var
-    respond*: RespondProc
+    # local interface
+    proc respond() =
+      respondProc(request, code, headers, body)
 
+    template add(x: varargs[typed, `$`]) =
+      body.add(x)
 
-  #proc respond*(request: Request, code: int, headers: sink HttpHeaders, body: sink string) =
-  #  respondProc(request, code, headers, body)
+    includeFromString(sourcePath)
 
-when isMainModule:
+    if not request.responded:
+      respond()
 
+## Pharao server
+when isMainModule and appType == "console":
   type
     PharaoRouteObj = object
       path: string
       libHandle: LibHandle
       libModificationTime: Time
-      getProc: RequestProc
-      postProc: RequestProc
-      headProc: RequestProc
-      optionsProc: RequestProc
-      putProc: RequestProc
-      deleteProc: RequestProc
-      patchProc: RequestProc
       requestProc: RequestProc
     PharaoRoute = ref PharaoRouteObj
 
@@ -125,66 +134,25 @@ PHARAOH_LOG_ERRORS       true
           const dynlibFormat = when defined(windows): "$#.dll" elif defined(macosx): "$#.dylib" else: "lib$#.so"
           let dynlibPath = dynlibRoot / dir / dynlibFormat % name
           createDir(dynlibPath.parentDir)
-          let cmd = "$# c --nimcache:$# --app:lib --d:useMalloc -o:$# $#" % [nimCmd, nimCachePath, dynlibPath, sourcePath]
-          let (output, exitCode) = execCmdEx(cmd)
+
+          # compile the source.
+          #
+
+          let cmd = "$# c --nimcache:$# --app:lib --d:useMalloc --d:pharaoh.sourcePath=$# -o:$# $#" % [nimCmd, nimCachePath, sourcePath, dynlibPath, "-"]
+          let (output, exitCode) = execCmdEx(cmd, input="include pharao")
           if exitCode != 0:
             request.respond(500, defaultHeaders, output)
             return
           route.libHandle = loadLib(dynlibPath)
-          let init = cast[InitProc](route.libHandle.symAddr("init"))
-          init(respond)
-          if init.isNil:
-            let error = "Could not find proc init in $#, please import module pharao\n" % sourcePath
+          route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
+          if route.requestProc.isNil:
+            let error = "Could not find proc 'request' in $#, please let pharao server compile it\n" % dynlibPath
             route.libHandle.unloadLib
             request.respond(500, defaultHeaders, error)
             return
-          route.getProc = cast[RequestProc](route.libHandle.symAddr("get"))
-          route.postProc = cast[RequestProc](route.libHandle.symAddr("post"))
-          route.headProc = cast[RequestProc](route.libHandle.symAddr("head"))
-          route.optionsProc = cast[RequestProc](route.libHandle.symAddr("options"))
-          route.putProc = cast[RequestProc](route.libHandle.symAddr("put"))
-          route.deleteProc = cast[RequestProc](route.libHandle.symAddr("delete"))
-          route.patchProc = cast[RequestProc](route.libHandle.symAddr("patch"))
-          route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
           route.libModificationTime = dynlibPath.getLastModificationTime
-       
-        block byMethod:
-          case request.httpMethod:
-          of "GET":
-            if not route.getProc.isNil:
-              route.getProc(request)
-              break byMethod
-          of "POST":
-            if not route.postProc.isNil:
-              route.postProc(request)
-              break byMethod
-          of "HEAD":
-            if not route.headProc.isNil:
-              route.headProc(request)
-              break byMethod
-          of "OPTIONS":
-            if not route.optionsProc.isNil:
-              route.optionsProc(request)
-              break byMethod
-          of "PUT":
-            if not route.putProc.isNil:
-              route.putProc(request)
-              break byMethod
-          of "DELETE":
-            if not route.deleteProc.isNil:
-              route.deleteProc(request)
-              break byMethod
-          of "PATCH":
-            if not route.patchProc.isNil:
-              route.patchProc(request)
-              break byMethod
 
-          if not route.requestProc.isNil:
-            route.requestProc(request)
-            break byMethod
-
-          request.respond(405, defaultHeaders, "method not allowed")
-
+        route.requestProc(request, respond)
       else:
         request.respond(404, defaultHeaders, "not found")
 

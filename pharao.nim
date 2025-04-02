@@ -3,7 +3,7 @@ when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
 
 import
-  std/[os, osproc, parseopt,envvars,strutils,paths,dirs,files,tables,dynlib,times,macros],
+  std/[os, osproc, parseopt,envvars,strutils,paths,dirs,files,tables,dynlib,times,macros,strscans],
   mummy, mummy/routers
 export mummy except request, respond
 
@@ -118,21 +118,35 @@ PHARAOH_LOG_ERRORS       true
       of cmdArgument:
         usage()
 
-
     var routes: Table[string, PharaoRoute]
-    
+
     createDir(dynlibRoot)
+
+    const DynlibPattern = DynlibFormat.replace("$1", "$+")
+
+    for dynlibPath in walkDirRec(dynlibRoot):
+      let dynlibName = dynlibPath.lastPathPart
+      var name: string
+      if scanf(dynlibName, DynlibPattern, name):
+        let path = dynlibPath.parentDir[ dynlibRoot.len .. ^1 ] / name
+        let route = PharaoRoute(path: path)
+        route.libHandle = loadLib(dynlibPath)
+        route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
+        if route.requestProc.isNil:
+          stderr.write("Warning: Invalid dynamic library $1, not loading route for path $2" % [dynlibPath, path])
+        else:
+          route.libModificationTime = dynlibPath.getLastModificationTime
+          routes[path] = route
 
     proc handler(request: Request) =
       let sourcePath = wwwRoot / request.path
-      let (dir, name, _) = request.path.splitFile
       let defaultHeaders = @{"Content-Type": "text/plain"}.HttpHeaders
       if fileExists(sourcePath):
 
         var route = routes.mgetOrPut(request.path, PharaoRoute(path: request.path))
         if route.libModificationTime < sourcePath.getLastModificationTime:
-          const dynlibFormat = when defined(windows): "$#.dll" elif defined(macosx): "$#.dylib" else: "lib$#.so"
-          let dynlibPath = dynlibRoot / dir / dynlibFormat % name
+          let (dir, name, ext) = request.path.splitFile
+          let dynlibPath = dynlibRoot / request.path.parentDir / DynlibFormat % request.path.lastPathPart
           createDir(dynlibPath.parentDir)
 
           # compile the source.

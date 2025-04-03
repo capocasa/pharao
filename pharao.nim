@@ -120,6 +120,8 @@ PHARAOH_LOG_ERRORS       true
               stderr.write(output)
             return
           echo output
+          if not route.libHandle.isNil:
+            route.libHandle.unloadLib
           route.libHandle = loadLib(dynlibPath)
           route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
           if route.requestProc.isNil:

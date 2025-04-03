@@ -8,8 +8,8 @@
 #
 
 import
-  std/[os, osproc, parseopt,envvars,strutils,paths,dirs,files,tables,dynlib,times,macros,strscans],
-  mummy, mummy/routers, mummy/fileloggers,
+  std/[strutils,dynlib,times,macros],
+  mummy,
   ./common
 
 when not defined(useMalloc):
@@ -23,20 +23,29 @@ const sourcePath {.strdefine: "pharaoh.sourcePath".} = ""
 when sourcePath == "":
   {.error: "Pharaoh dynamic library requires a source path, please let pharoh server compile it".}
 
-# this is an include with a string for the file name
-macro entomb(filename: static[string]): untyped =
-  parseStmt(readFile(filename), filename)
 
+
+# this is an include with a string for the file name
 proc noImports(stmts: NimNode): NimNode =
+  result = newStmtList()
   for stmt in stmts:
     if stmt.kind != nnkImportStmt:
       result.add(stmt)
 
 proc importsOnly(stmts: NimNode): NimNode =
+  result = newStmtList()
   for stmt in stmts:
     if stmt.kind == nnkImportStmt:
       result.add(stmt)
 
+macro entomb(): untyped =
+  noImports(parseStmt(readFile(sourcePath), sourcePath))
+
+macro preEntomb(): untyped =
+  importsOnly(parseStmt(readFile(sourcePath), sourcePath))
+
+#macro dynamicInclude(): untyped =
+#  newNimNode(nnkIncludeStmt).add(newIdentNode(sourcePath))
 
 # dynlib interface
 proc NimMain() {.cdecl, importc.}
@@ -44,6 +53,8 @@ proc library_init() {.exportc, dynlib, cdecl.} =
   NimMain()
 proc library_deinit() {.exportc, dynlib, cdecl.} =
   GC_FullCollect()
+
+preEntomb()
 
 proc request*(request: Request, respondProc: RespondProc) {.exportc, dynlib.} =
   var
@@ -55,10 +66,10 @@ proc request*(request: Request, respondProc: RespondProc) {.exportc, dynlib.} =
   proc respond() =
     respondProc(request, code, headers, body)
   
-  #template echo(x: varargs[string, `$`]) =
-  #  body &= x.join
+  template echo(x: varargs[string, `$`]) =
+    body &= x.join
 
-  entomb(sourcePath)
+  entomb()
 
   if not request.responded:
     respond()

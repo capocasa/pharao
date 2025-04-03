@@ -117,9 +117,9 @@ PHARAOH_LOG_ERRORS       true
             else:
               request.respond(500, defaultHeaders, "internal server error")
             if logErrors:
-              stderr.write(output)
+              logger.error(output)
             return
-          echo output
+          logger.debug(output)
           if not route.libHandle.isNil:
             route.libHandle.unloadLib
           route.libHandle = loadLib(dynlibPath)
@@ -127,7 +127,12 @@ PHARAOH_LOG_ERRORS       true
           if route.requestProc.isNil:
             let error = "Could not find proc 'request' in $#, please let pharao server compile it\n" % dynlibPath
             route.libHandle.unloadLib
-            request.respond(500, defaultHeaders, error)
+            if outputErrors:
+              request.respond(500, defaultHeaders, error)
+            else:
+              request.respond(500, defaultHeaders, "internal server error")
+            if logErrors:
+              logger.error(error)
             return
           route.libModificationTime = dynlibPath.getLastModificationTime
 

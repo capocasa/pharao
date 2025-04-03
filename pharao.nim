@@ -3,56 +3,11 @@ when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
 
 import
-  std/[os, osproc, parseopt,envvars,strutils,paths,dirs,files,tables,dynlib,times,macros,strscans],
-  mummy, mummy/routers
-export mummy except request, respond
+  std/[os, osproc, parseopt,envvars,strutils,paths,tables,dynlib,times,strscans],
+  mummy, mummy/fileloggers,
+  pharao/common
 
 ## shared code
-type
-  RespondProc = proc(request: Request, code: int, headers: sink HttpHeaders, body: sink string) {.nimcall,gcsafe.}
-  RequestProc = proc(request: Request, respondProc: RespondProc) {.nimcall,gcsafe.}
-
-
-## Pharao dynamic library.
-#
-# This is compiled to a dynamic library by the pharao server
-# when a source file is updated. It provides the library
-# interface to receive the request from the server and send the
-# response, and some variables and utilities as an interface for the source file.
-#
-when isMainModule and appType == "lib":
-
-  # set the include file passed from server at dynamic lib compile time
-  const sourcePath {.strdefine: "pharaoh.sourcePath".} = ""
-  when sourcePath == "":
-    {.error: "Pharaoh dynamic library requires a source path, please let pharoh server compile it".}
-  macro includeFromString(str: static[string]) =
-    newNimNode(nnkIncludeStmt).add(newIdentNode(str))
-
-  # dynlib interface
-  proc NimMain() {.cdecl, importc.}
-  proc library_init() {.exportc, dynlib, cdecl.} =
-    NimMain()
-  proc library_deinit() {.exportc, dynlib, cdecl.} =
-    GC_FullCollect()
-
-  proc request*(request: Request, respondProc: RespondProc) {.exportc, dynlib.} =
-    var
-      code = 200
-      headers = @{"Content-Type":"text/html"}.HttpHeaders
-      body = "" 
-  
-    # local interface
-    proc respond() =
-      respondProc(request, code, headers, body)
-
-    template add(x: varargs[typed, `$`]) =
-      body.add(x)
-
-    includeFromString(sourcePath)
-
-    if not request.responded:
-      respond()
 
 ## Pharao server
 when isMainModule and appType == "console":
@@ -81,6 +36,8 @@ when isMainModule and appType == "console":
     let nimCachePath = getEnv("PHARAOH_NIM_CACHE", "cache")
     let outputErrors = getEnv("PHARAOH_OUTPUT_ERRORS", "true").parseBool
     let logErrors = getEnv("PHARAOH_LOG_ERRORS", "true").parseBool
+
+    let logger = newFileLogger(stdout)
 
     for kind, key, val in getopt():
       case kind
@@ -153,10 +110,16 @@ PHARAOH_LOG_ERRORS       true
           #
 
           let cmd = "$# c --nimcache:$# --app:lib --d:useMalloc --d:pharaoh.sourcePath=$# -o:$# $#" % [nimCmd, nimCachePath, sourcePath, dynlibPath, "-"]
-          let (output, exitCode) = execCmdEx(cmd, input="include pharao")
+          let (output, exitCode) = execCmdEx(cmd, input="include pharao/wrap")
           if exitCode != 0:
-            request.respond(500, defaultHeaders, output)
+            if outputErrors:
+              request.respond(500, defaultHeaders, output)
+            else:
+              request.respond(500, defaultHeaders, "internal server error")
+            if logErrors:
+              stderr.write(output)
             return
+          echo output
           route.libHandle = loadLib(dynlibPath)
           route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
           if route.requestProc.isNil:

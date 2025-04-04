@@ -8,9 +8,10 @@
 #
 
 import
-  std/[strutils,dynlib,times,macros],
-  mummy,
+  std/[strutils,macros],
   ./common
+
+from mummy import Request, HttpHeaders, responded
 
 when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}

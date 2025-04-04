@@ -3,7 +3,7 @@ when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
 
 import
-  std/[os, osproc, parseopt,envvars,strutils,paths,tables,dynlib,times,strscans],
+  std/[os, osproc, parseopt,envvars,strutils,paths,tables,dynlib,times,strscans,locks],
   mummy, mummy/fileloggers,
   pharao/common
 
@@ -17,8 +17,13 @@ when isMainModule and appType == "console":
       libHandle: LibHandle
       libModificationTime: Time
       requestProc: RequestProc
-      uniqueId: int
+      lock: Lock
     PharaoRoute = ref PharaoRouteObj
+        
+  proc newPharaoRoute(path: string): PharaoRoute =
+    new(result)
+    result.path = path
+    result.lock.initLock
 
   # pharao server
   # handle requests, compile .nim file in web root to dynlib and load
@@ -102,6 +107,10 @@ PHARAOH_LOG_ERRORS       true
       if fileExists(sourcePath):
 
         var route = routes.mgetOrPut(request.path, newPharaoRoute(request.path))
+        
+        # lock route (but now other routes) during entire compilation. could possibly be optimized
+        # in several ways but unsure whether any of them are good idea
+        acquire(route.lock)
         if route.libModificationTime < sourcePath.getLastModificationTime:
           let (dir, name, ext) = request.path.splitFile
           
@@ -137,10 +146,8 @@ PHARAOH_LOG_ERRORS       true
             if logErrors:
               logger.error(error)
             return
-          removeFile(makeDynlibPath(route.uniqueId))
-          route.uniqueId = uniqueId
           route.libModificationTime = dynlibPath.getLastModificationTime
-
+        route.lock.release
         route.requestProc(request, respond)
       else:
         request.respond(404, defaultHeaders, "not found")

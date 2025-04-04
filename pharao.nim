@@ -17,6 +17,7 @@ when isMainModule and appType == "console":
       libHandle: LibHandle
       libModificationTime: Time
       requestProc: RequestProc
+      uniqueId: int
     PharaoRoute = ref PharaoRouteObj
 
   # pharao server
@@ -79,20 +80,23 @@ PHARAOH_LOG_ERRORS       true
 
     createDir(dynlibRoot)
 
-    const DynlibPattern = DynlibFormat.replace("$1", "$+")
+    const DynlibFormatWithId = DynlibFormat & ".$2"
+    const DynlibPatternWithId = DynlibFormatWithId.replace("$1", "$+").replace("$2", "$i")
 
     for dynlibPath in walkDirRec(dynlibRoot):
       let dynlibName = dynlibPath.lastPathPart
       var name: string
-      if scanf(dynlibName, DynlibPattern, name):
+      var uniqueId: int
+      if scanf(dynlibName, DynlibPatternWithId, name, uniqueId):
         let path = dynlibPath.parentDir[ dynlibRoot.len .. ^1 ] / name
         let route = PharaoRoute(path: path)
         route.libHandle = loadLib(dynlibPath)
         route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
         if route.requestProc.isNil:
-          stderr.write("Warning: Invalid dynamic library $1, not loading route for path $2" % [dynlibPath, path])
+          logger.error("Invalid dynamic library $1, not loading route for path $2" % [dynlibPath, path])
         else:
           route.libModificationTime = dynlibPath.getLastModificationTime
+          route.uniqueId = uniqueId
           routes[path] = route
 
     proc handler(request: Request) =
@@ -103,12 +107,19 @@ PHARAOH_LOG_ERRORS       true
         var route = routes.mgetOrPut(request.path, PharaoRoute(path: request.path))
         if route.libModificationTime < sourcePath.getLastModificationTime:
           let (dir, name, ext) = request.path.splitFile
-          let dynlibPath = dynlibRoot / request.path.parentDir / DynlibFormat % request.path.lastPathPart
+          let uniqueId = route.uniqueId + 1
+          
+          proc makeDynlibPath(uniqueId: int): string =
+            dynlibRoot / request.path.parentDir / DynlibFormatWithId % [request.path.lastPathPart, $uniqueId]
+
+          let dynlibPath = makeDynlibPath(uniqueId)
           createDir(dynlibPath.parentDir)
 
           # compile the source.
           #
 
+          if not route.libHandle.isNil:
+            route.libHandle.unloadLib
           let cmd = "$# c --nimcache:$# --app:lib --d:useMalloc --d:pharaoh.sourcePath=$# -o:$# $#" % [nimCmd, nimCachePath, sourcePath, dynlibPath, "-"]
           let (output, exitCode) = execCmdEx(cmd, input="include pharao/wrap")
           if exitCode != 0:
@@ -119,9 +130,8 @@ PHARAOH_LOG_ERRORS       true
             if logErrors:
               logger.error(output)
             return
-          logger.debug(output)
-          if not route.libHandle.isNil:
-            route.libHandle.unloadLib
+          else:
+            logger.debug(output)
           route.libHandle = loadLib(dynlibPath)
           route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
           if route.requestProc.isNil:
@@ -134,6 +144,8 @@ PHARAOH_LOG_ERRORS       true
             if logErrors:
               logger.error(error)
             return
+          removeFile(makeDynlibPath(route.uniqueId))
+          route.uniqueId = uniqueId
           route.libModificationTime = dynlibPath.getLastModificationTime
 
         route.requestProc(request, respond)

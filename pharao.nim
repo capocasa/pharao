@@ -48,14 +48,14 @@ when isMainModule and appType == "console":
 
   proc init() =
 
-    let port = getEnv("PHARAOH_PORT", "2347").parseInt.Port
-    let host = getEnv("PHARAOH_HOST", "localhost")
-    let wwwRoot = getEnv("PHARAOH_WWW_ROOT", "/var/www")
-    let dynlibRoot = getEnv("PHARAOH_DYNLIB_PATH", "lib")
-    let nimCmd = getEnv("PHARAOH_NIM_PATH", "nim")
-    let nimCachePath = getEnv("PHARAOH_NIM_CACHE", "cache")
-    let outputErrors = getEnv("PHARAOH_OUTPUT_ERRORS", "true").parseBool
-    let logErrors = getEnv("PHARAOH_LOG_ERRORS", "true").parseBool
+    let port = getEnv("PHARAO_PORT", "2347").parseInt.Port
+    let host = getEnv("PHARAO_HOST", "localhost")
+    let wwwRoot = getEnv("PHARAO_WWW_ROOT", "/var/www")
+    let dynlibRoot = getEnv("PHARAO_DYNLIB_PATH", "lib")
+    let nimCmd = getEnv("PHARAO_NIM_PATH", "nim")
+    let nimCachePath = getEnv("PHARAO_NIM_CACHE", "cache")
+    let outputErrors = getEnv("PHARAO_OUTPUT_ERRORS", "true").parseBool
+    let logErrors = getEnv("PHARAO_LOG_ERRORS", "true").parseBool
 
     let logger = newFileLogger(stdout)
 
@@ -80,14 +80,14 @@ Configuration by environment variable:
 
 Variable              Default value
 
-PHARAOH_PORT             2347
-PHARAOH_HOST             localhost
-PHARAOH_WWW_ROOT         /var/www
-PHARAOH_DYNLIB_ROOT      [working directory]/lib
-PHARAOH_NIM_PATH         nim
-PHARAOH_NIM_CACHE        [working directory]/cache
-PHARAOH_OUTPUT_ERRORS    true
-PHARAOH_LOG_ERRORS       true
+PHARAO_PORT             2347
+PHARAO_HOST             localhost
+PHARAO_WWW_ROOT         /var/www
+PHARAO_DYNLIB_ROOT      [working directory]/lib
+PHARAO_NIM_PATH         nim
+PHARAO_NIM_CACHE        [working directory]/cache
+PHARAO_OUTPUT_ERRORS    true
+PHARAO_LOG_ERRORS       true
 
 """
             quit(0)

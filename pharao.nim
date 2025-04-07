@@ -28,6 +28,20 @@ when isMainModule and appType == "console":
   # pharao server
   # handle requests, compile .nim file in web root to dynlib and load
 
+  proc initLibrary(route: var PharaoRoute, dynlibPath: string) =
+    route.libHandle = loadLib(dynlibPath)
+    if route.libHandle.isNil:
+      raise newException(LibraryError, "dynamic library $1 could not be loaded for path" % [dynlibPath, route.path])
+    route.requestProc = cast[RequestProc](route.libHandle.symAddr("pharaoRequest"))
+    if route.requestProc.isNil:
+      raise newException(LibraryError, "dynamic library $1 has no pharaoRequest, not loading route for path $2" % [dynlibPath, route.path])
+    
+    let initProc = cast[InitProc](route.libHandle.symAddr("pharaoInit"))
+    if initProc.isNil:
+      raise newException(LibraryError, "dynamic library $1 has no pharaoInit, not loading route for path $2" % [dynlibPath, route.path])
+    initProc(respond, nil)
+    route.libModificationTime = dynlibPath.getLastModificationTime
+
   proc usage() =
     echo "Invalid option or argument, run with optoin --help for more information"
     quit(1)
@@ -87,19 +101,20 @@ PHARAOH_LOG_ERRORS       true
 
     const DynlibPattern = DynlibFormat.replace("$1", "$+")
 
+
+    ## load existing dynlibs into routes on startup
     for dynlibPath in walkDirRec(dynlibRoot):
       let dynlibName = dynlibPath.lastPathPart
       var name: string
       if scanf(dynlibName, DynlibPattern, name):
         let path = dynlibPath.parentDir[ dynlibRoot.len .. ^1 ] & DirSep & name
-        let route = newPharaoRoute(path)
-        route.libHandle = loadLib(dynlibPath)
-        route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
-        if route.requestProc.isNil:
-          logger.error("Invalid dynamic library $1, not loading route for path $2" % [dynlibPath, path])
-        else:
-          route.libModificationTime = dynlibPath.getLastModificationTime
-          routes[path] = route
+        var route = newPharaoRoute(path)
+        try:
+          route.initLibrary(dynlibPath)
+        except LibraryError as e:
+          if logErrors:
+            logger.error(e.msg)
+        routes[path] = route
 
     proc handler(request: Request) =
       let sourcePath = wwwRoot / request.path
@@ -110,7 +125,7 @@ PHARAOH_LOG_ERRORS       true
         
         # lock route (but now other routes) during entire compilation. could possibly be optimized
         # in several ways but unsure whether any of them are good idea
-        acquire(route.lock)
+        route.lock.acquire
         if route.libModificationTime < sourcePath.getLastModificationTime:
           let (dir, name, ext) = request.path.splitFile
           
@@ -124,31 +139,26 @@ PHARAOH_LOG_ERRORS       true
             route.libHandle.unloadLib
           let cmd = "$1 c --nimcache:$2 --app:lib --d:useMalloc --d:pharaoh.sourcePath=$3 -o:$4 -" % [nimCmd, nimCachePath, sourcePath, dynlibPath]
           let (output, exitCode) = execCmdEx(cmd, input="include pharao/wrap")
-          if exitCode != 0:
-            if outputErrors:
-              request.respond(500, defaultHeaders, output)
-            else:
-              request.respond(500, defaultHeaders, "internal server error")
+          if exitCode == 0:
+            logger.debug(output)
+          else:
+            route.lock.release
+            request.respond(500, defaultHeaders, if outputErrors: output else: "internal server error")
             if logErrors:
               logger.error(output)
             return
-          else:
-            logger.debug(output)
-          route.libHandle = loadLib(dynlibPath)
-          route.requestProc = cast[RequestProc](route.libHandle.symAddr("request"))
-          if route.requestProc.isNil:
-            let error = "Could not find proc 'request' in $#, please let pharao server compile it\n" % dynlibPath
-            route.libHandle.unloadLib
-            if outputErrors:
-              request.respond(500, defaultHeaders, error)
-            else:
-              request.respond(500, defaultHeaders, "internal server error")
+          try:
+            route.initLibrary(dynlibPath)
+          except LibraryError as e:
+            route.lock.release
+            request.respond(500, defaultHeaders, if outputErrors: e.msg else: "internal server error")
             if logErrors:
-              logger.error(error)
+              logger.error(e.msg)
             return
-          route.libModificationTime = dynlibPath.getLastModificationTime
         route.lock.release
-        route.requestProc(request, respond)
+        route.requestProc(request)
+        if not request.responded:
+          request.respond(503, defaultHeaders, "unavailable")
       else:
         request.respond(404, defaultHeaders, "not found")
 

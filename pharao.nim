@@ -137,7 +137,8 @@ PHARAOH_LOG_ERRORS       true
 
           if not route.libHandle.isNil:
             route.libHandle.unloadLib
-          let cmd = "$1 c --nimcache:$2 --app:lib --d:useMalloc --d:pharaoh.sourcePath=$3 -o:$4 -" % [nimCmd, nimCachePath, sourcePath, dynlibPath]
+            route.libHandle = nil
+          let cmd = "$1 c --nimcache:$2 --app:lib --d:useMalloc --noMain --d:pharao.sourcePath=$3 -o:$4 -" % [nimCmd, nimCachePath, sourcePath, dynlibPath]
           let (output, exitCode) = execCmdEx(cmd, input="include pharao/wrap")
           if exitCode == 0:
             logger.debug(output)

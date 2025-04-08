@@ -13,7 +13,7 @@ import
 
 from mummy import Request, HttpHeaders, responded
 
-import mummy/fileloggers
+import mummy
 
 when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
@@ -52,22 +52,31 @@ var
   body {.threadvar.}: string
   request {.threadvar.}:Request
   respondProc: RespondProc
-  logger: FileLogger
+  log: LogProc
+
+## dynlib interface
 
 proc respond() =
   respondProc(request, code, headers, body)
-
-## some tools
 
 proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
   # set defaults
   request = requestArg
   NimMainModule()
 
+## some tools
+
 template echo(x: varargs[string, `$`]) =
   for s in x:
-    body &= s
-  body &= "\n"
+    body.add s
+  body.add "\n" 
+
+proc debug(message: string) =
+  log(DebugLevel, message)
+proc info(message: string) =
+  log(InfoLevel, message)
+proc error(message: string) =
+  log(ErrorLevel, message)
 
 ## init defaults
 
@@ -79,12 +88,14 @@ headers = @{"Content-Type":"text/html"}.HttpHeaders
 
 entomb(pharaoSourcePath)
 
-## main dynlib interface
-proc pharaoInit(respondProcArg: RespondProc, logFile: File) {.exportc,dynlib.} =
+## more dynlib interface
+proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc) {.exportc,dynlib.} =
   respondProc = respondProcArg
+  log = logProc
   assert not respondProc.isNil, "Empty responder received"
-  logger = newFileLogger(logFile)
-  stdout = logFile
+  assert not logProc.isNil, "Empty logger received"
+  
+  # allow an init proc
   when compiles(init()):
     init()
 

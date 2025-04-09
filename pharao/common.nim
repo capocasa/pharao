@@ -1,4 +1,4 @@
-import mummy, mummy/fileloggers, times, strutils
+from mummy import Request,HttpHeaders,LogLevel
 
 # types and other shared definitions
 
@@ -7,5 +7,4 @@ type
   RequestProc* = proc(request: Request) {.nimcall,gcsafe.}
   LogProc* = proc(level: LogLevel, message: string) {.closure, gcsafe}
   InitProc* = proc(respondProc: RespondProc, logProc: LogProc) {.nimcall,gcsafe.}
-
 

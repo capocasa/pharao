@@ -62,11 +62,11 @@ macro pharaoRequestBody(): untyped =
 
 ## some tools
 
-proc debug(message: string) =
+proc debug(message: string) {.hint[XDeclaredButNotUsed]: off.} =
   log(DebugLevel, message)
-proc info(message: string) =
+proc info(message: string) {.hint[XDeclaredButNotUsed]: off.} =
   log(InfoLevel, message)
-proc error(message: string) =
+proc error(message: string) {.hint[XDeclaredButNotUsed]: off.} =
   log(ErrorLevel, message)
 
 # dummy vars

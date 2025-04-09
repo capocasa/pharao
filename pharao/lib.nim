@@ -11,6 +11,7 @@ import
   ./common,
   mummy
 
+## basic compile assertions
 
 when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
@@ -23,44 +24,23 @@ const pharaoSourcePath {.strdefine: "pharao.sourcePath".} = ""
 when pharaoSourcePath == "":
   {.error: "Pharaoh dynamic library requires a --d:sourcePath, usually the pharoh server will take care of that for you".}
 
-const transformedSource = CacheTable"transformedSource"
-
-# sets up GC but does not exececute main module
-proc PreMain() {.cdecl, importc.}
-proc PreMainInner() {.cdecl, importc.}
+# sets up GC and run main module on library init
 proc NimMain() {.cdecl, importc.}
-proc NimMainInner() {.cdecl, importc.}
-proc NimMainModule() {.cdecl, importc.}
 proc library_init() {.exportc, dynlib, cdecl.} =
   NimMain()
 proc library_deinit() {.exportc, dynlib, cdecl.} =
   GC_FullCollect()
 
-## local interface
+## library specific state
 
-# using pharao is reading and setting these variables,
-# and letting respond get called (or call manually)
 var
-  #code {.threadvar.}: int
-  #headers {.threadvar.}: HttpHeaders
-  #body {.threadvar.}: string
-  #request {.threadvar.}:Request
-  respondProc: RespondProc
-  log: LogProc
+  respondProc: RespondProc  # call web server responder
+  log: LogProc  # write to log
 
+## logging tools
 
-## source code transformation
-macro pharaoInit(): untyped =
-  result = transformedSource["init"]
-  #echo "TRANSFORMED SOURCE INIT"
-  #echo result.treeRepr
-
-macro pharaoRequestBody(): untyped =
-  result = transformedSource["requestBody"]
-  #echo "TRANSFORMED SOURCE REQUEST PROC"
-  #echo result.treeRepr
-
-## some tools
+# these are duplicated from pharao.nim so we only have to
+# receive the log proc on intialization
 
 proc debug(message: string) {.hint[XDeclaredButNotUsed]: off.} =
   log(DebugLevel, message)
@@ -69,14 +49,7 @@ proc info(message: string) {.hint[XDeclaredButNotUsed]: off.} =
 proc error(message: string) {.hint[XDeclaredButNotUsed]: off.} =
   log(ErrorLevel, message)
 
-# dummy vars
-# just so the imports macro can include sourcePath
-# in this scope to process the imports
-var
-  code: int
-  headers: HttpHeaders
-  body: string
-  request: Request
+## user code preprocessing macros
 
 macro filterImportsOnly(source: typed): untyped =
   result = newStmtList()
@@ -105,45 +78,50 @@ macro filterNoImports(source: typed): untyped =
 macro includePharaoSource(): untyped =
   newNimNode(nnkIncludeStmt).add(newIdentNode(pharaoSourcePath))
 
+## Write imports from user-supplied code (but nothing else)
+var
+  # dummy vars
+  # just so the import macro can include sourcePath
+  # in this scope to extract and insert the import statements
+  # (those are not allowed in a proc)
+  code: int
+  headers: HttpHeaders
+  body: string
+  request: Request
+
 filterImportsOnly(includePharaoSource)
 
+## dynlib interface
+
+
+# main request proc
 proc pharaoRequest*(request: Request) {.exportc,dynlib.} =
+  
+  ## Interface is the request param and these local vars
   var
     code = 200
     headers = @{"Content-Type":"text/html"}.HttpHeaders
     body = ""
 
+  # interface func to respond
+  # manually to continue execution
+  # after completed request
   proc respond() =
     respondProc(request, code, headers, body)
 
+  ## Write user supplied code, minus imports
   filterNoImports(includePharaoSource())
 
+  # autorespond if not responded yet
   if not request.responded:
     respond()
 
-## init defaults
-
-##b now include the actual code body
-#[
-block local:
-  var
-    code: int
-    headers: HttpHeaders
-    body: string
-  code = 200
-  body = ""
-  headers = @{"Content-Type":"text/html"}.HttpHeaders
-  template echo(x: varargs[string, `$`]) =
-    for s in x:
-      body.add s
-    body.add "\n" 
-  entomb(pharaoSourcePath)
-]#
-
-## more dynlib interface
+# Initialization hook, called by pharao on loading library to
+# provide callables. Data could be provided too.
 proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc) {.exportc,dynlib.} =
   respondProc = respondProcArg
   log = logProc
   assert not respondProc.isNil, "Empty responder received"
   assert not logProc.isNil, "Empty logger received"
+
 

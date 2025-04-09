@@ -183,7 +183,7 @@ PHARAO_LOG_ERRORS       true
           log(DebugLevel, output)
         else:
           route.lock.release
-          request.respond(500, defaultHeaders, if outputErrors: output else: "internal server error")
+          request.respond(500, defaultHeaders, if outputErrors: output else: "internal server error\n")
           if logErrors:
             log(ErrorLevel, output)
           return
@@ -191,16 +191,16 @@ PHARAO_LOG_ERRORS       true
           route.initLibrary(dynlibPath)
         except LibraryError as e:
           route.lock.release
-          request.respond(500, defaultHeaders, if outputErrors: e.msg else: "internal server error")
+          request.respond(500, defaultHeaders, if outputErrors: e.msg else: "internal server error\n")
           if logErrors:
             log(ErrorLevel, e.msg)
           return
       route.lock.release
       route.requestProc(request)
       if not request.responded:
-        request.respond(503, defaultHeaders, "unavailable")
+        request.respond(503, defaultHeaders, "unavailable\n")
     else:
-      request.respond(404, defaultHeaders, "not found")
+      request.respond(404, defaultHeaders, "not found\n")
 
   let server = newServer(handler)
   server.serve(port, host)

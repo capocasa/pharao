@@ -161,17 +161,36 @@ body = "blackhole"  # this doesn't do anything any more
 ```
 
 ```
-$ curl localhost:2457/stayingalive.nim & && tail -f /tmp/later.log
+$ curl localhost:2347/stayingalive.nim & && tail -f /tmp/later.log
 done
 
 ```
 
 Use includes to easily have different files
 
-```nim`
+```nim
+# /var/www/this.nim
+
+echo "this"
+
+include that
 ```
 
-Imports work too. If you want to use pharao's variables in imported files, add `import pharao/tools`.
+```nim
+# /var/www/that.nim
+
+echo "that"
+```
+
+```sh
+$ localhost:2347/this.nim
+this
+that
+```
+
+Imports work too.
+
+If you want to use pharao's variables in imported files, add `import pharao/tools`.
 This is not necessary if you have no side effects (recommended) or use includes.
 
 ```nim
@@ -191,6 +210,7 @@ proc foo*() =
 # curl localhost:2347/imp.nim
 I was imported!!!
 ```
+
 
 .. warning::
   For security, keep your imports and includes out of your web root (recommended) or make sure the module scope doesn't do anything.
@@ -330,7 +350,7 @@ for row in db.fastRows sql" SELECT * FROM foo":
 And a minimal, but workable script to create and maintain your database.
 
 ```nim
-# /var/www/initdb-av0k2ja15v2l07rbwchexz48.nim
+# /var/www/initdb-av0k2ja15v2347rbwchexz48.nim
 # obscure URL is a crude but workable authentication method
 
 import db_connector/db_sqlite, strutils
@@ -368,7 +388,7 @@ Then you can initialize the database and run the example program a few times.
 
 
 ```
-$ curl localhost:2347/initdb-av0k2ja15v2l07rbwchexz48.nim
+$ curl localhost:2347/initdb-av0k2ja15v2347rbwchexz48.nim
 $ curl localhost:2347/sqlite.nim
 1	dsaf
 $ curl localhost:2347/sqlite.nim
@@ -583,7 +603,7 @@ server {
   }
 
   location ~ \.nim$ {
-    proxy_pass http://127.0.0.1:2457;
+    proxy_pass http://127.0.0.1:2347;
     proxy_buffering off;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Host $host;
@@ -614,7 +634,7 @@ server {
   }
 
   location ~ \.nim$ {
-    proxy_pass http://127.0.0.1:2457;
+    proxy_pass http://127.0.0.1:2347;
     proxy_buffering off;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Host $host;

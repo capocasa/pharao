@@ -1,14 +1,14 @@
 
-Pharao - quick 'n easy Nim web app
-==================================
+Pharao - quick 'n easy Nim web programming 
+==========================================
 
-Pharao is the quick 'n easy way to run Nim web apps.
+Pharao is for quick 'n easy web programming.
 
-Start up a pharao server and point it at a web root.
+Start up a pharao server (once) and point it at a web root.
 
-Place a Nim file anywhere in the web root. Opening that path in the browser will compile, run and return the output.
+Place a Nim file anywhere in the web root. Then open that path in the browser. Pharao will compile your file into a request handler and call it.
 
-If this sounds familiar, that's because it's the author's best effort to replicate some of the beginner friendliness and easy-of-use of PHP while keeping the amazingness and extreme performance of Nim.
+If this sounds familiar, it's because it's the only thing the author missed about programming in PHP.
 
 Basic Usage
 -----------
@@ -22,20 +22,21 @@ $ nimble install pharao
 Run it.
 
 ```
-$ ./pharaoh
+$ export PHARAO_WEB_ROOT=/var/www  # optional
+$ pharao
 ```
 
 Create a Nim file somewhere in the web root. 
 
 ```nim
-# /var/www/foo.nim
+# /var/www/hello.nim
 echo "Hello, ancient world!"
 ```
 
 Call it. Voila!
 
 ```
-$ curl localhost:2347/foo.nim
+$ curl localhost:2347/hello.nim
 Hello, ancient world!
 ```
 
@@ -119,7 +120,7 @@ $ curl -d foo=bar localhost:2347/query.nim
 bar
 ```
 
-or as a multipart
+You may prefer multipart, as in `<form enctype='multipart/form-data'`
 
 ```nim
 # /var/www/multi.nim
@@ -135,7 +136,7 @@ $ curl -F foo=bar localhost:2347/multi.nim
 bar
 ```
 
-Multipart supports file upload
+multipart supports file uploads
 
 ```
 $ echo foo > /tmp/foo.txt
@@ -165,7 +166,13 @@ done
 
 ```
 
-Imports and includes work as normal
+Use includes to easily have different files
+
+```nim`
+```
+
+Imports work too. If you want to use pharao's variables in imported files, add `import pharao/tools`.
+This is not necessary if you have no side effects (recommended) or use includes.
 
 ```nim
 # /var/www/imp.nim
@@ -175,6 +182,7 @@ foo()
 
 ```nim
 # /var/www/imped.nim
+import pharao/tools
 proc foo*() =
   echo "I was imported!!!\n"
 ```
@@ -184,8 +192,8 @@ proc foo*() =
 I was imported!!!
 ```
 
-.. warning:: Just like with any system that allows executing source code from a directory, exercise caution when providing files that aren't meant to be called directly. This is a trade-off for the convenience- if you feel you cannot keep this in mind, I advise against using pharao.
-
+.. warning::
+  For security, keep your imports and includes out of your web root (recommended) or make sure the module scope doesn't do anything.
 
 This is ok
 
@@ -229,7 +237,7 @@ This is not ok
 
 ```nim
 # /var/www/badidea.nim
-
+import pharao/tools
 echo "sensitive user data"
 
 ```
@@ -252,32 +260,26 @@ Because then anyone can do
 $ curl localhost:2347/importer3.nim
 unauthorized
 $ curl localhost:2347/badidea.nim
-secret account password
+sensitive user data
 $ # whoops
 ```
 
-You can have a variable that only gets written to the first time your program runs. This goes away again if the pharao server is restarted.
-
-
+You can use "global" variables. They only get written when your code is compiled or the server is restarted.
 
 ```nim
 # /var/www/persist.nim
 
 proc calculate(): int =
-  # this would be more useful for a more complex calculation that takes a while
+  # stand-in for something that takes a while 
   2 + 2 
 
 let num {.global.} = calculate()  # calculate is only run once
-
-# let num {.threadvar.} = calculate()  # this would be run for about the first 40 requests but no more than that
-
-# let num = calculate()  # this would be run at every request
 
 body = $num
 
 ```
 
-This is a great way to set up a database connection, such as [LimDB](https://github.com/capocasa/limdb).
+This is also great way to set up a database connection, such as [LimDB](https://github.com/capocasa/limdb).
 
 ```
 $ nimble install limdb
@@ -286,53 +288,117 @@ $ nimble install limdb
 ```nim
 import limdb
 
-let db {.global.} = initDb("/var/lib/pharao/foo.db")  # don't put the database in /var/www or sub-directories
+let db {.global.} = initDb("foo.db")
 
 db["text"].add(".")  # this is both in-memory and on disk now
 body = db["text"]
 
 ```
 
-.. warning:: every pharao program runs inside one of a fixed number worker threads, which are sub-programs that run within pharao and have access to the same data. If you use regular variables or `{.threadvar.}` variables, you don't have to worry about that too much. Otherwise, you have to use make sure that all procs that work on that variable are "thread safe".
+.. info ::
+    every pharao program runs inside one of a fixed number worker threads, which are sub-programs that run within pharao and have access to the same data. If you mark a variable `{.global.}` to keep it around to make your program faster, you have to make sure that any changes to that variable are done in a "thread safe" way.
 
-The easiest way to have thread safety is to use libraries that already are written that way. This means they make sure that their procs are set up so that when they are called in threads they play nice with each other- usually through a so-called lock.
+    The easiest way to have thread safety is to use libraries that already are written that way, as LimDB is. Just use it.
 
-Some libraries such as LimDB are inherently thread safe- you can just go ahead and use it and ignore all this. Other libraries have wrappers that make them thread safe- the best I know for the Nim stdlib databases is `waterpark`.
 
-```
-$ nimble install waterpark
-```
 
-```nim
-# /var/www/miglite.nim
-# this is for creating and updating tables
-# only one connection needed
-if request.headers.getOrDefault("Authorization", "") == "myInternalSecret":
-  let db {.global.} = newSqlitePool(1, "/var/lib/pharao/foo.sqlite3")
-  c.exec "CREATE TABLE IF NOT EXISTS foo (id primary key, foo TEXT")"  # put this in a seperate file for a real app
-else:
-  code = 401
-  body = "Unauthorized\n"
-```
+Sometimes it's more useful for each worker to have its own copy of a variable that gets re-used each time a request is handled by that worker. That way, you have about 40 copies of the variable, but no more.
+
+The sqlite3 database expects to be use this way.
+
+Mark the variable as a thread-local variable- or `{.threadvar.}`
+
 
 ```nim
-# /var/www/sqlite.nim
-import waterpark/sqlite, random
+import db_connector/db_sqlite, random
 randomize()
-var asdf = "asdf"
-asdf.shuffle
-let db {.global.} = newSqlitePool(50, "/var/lib/pharao/foo.sqlite3")
-db.withConnection c:
-  c.exec """ INSERT INTO foo (foo) VALUES (?) """, asdf
-  for row in c.fastRows("SELECT * FROM foo"):
-    body.add row[0]
-    body.add "\t"
-    body.add row[1]
-    body.add "\n"
+var data = "asdf"
+data.shuffle()
+
+# can't do this, has to be on two lines
+# var db {. threadvar .} = open("foo.db", "", "", "")
+var db {. threadvar .}: DbConn
+db = open("foo.db", "", "", "")
+
+db.exec sql" INSERT INTO foo (foo) VALUES (?) ", data
+
+headers["Content-Type"] = "text/tsv"
+for row in db.fastRows sql" SELECT * FROM foo":
+  echo row[0], "\t", row[1]
 ```
 
+And a minimal, but workable script to create and maintain your database.
 
-.. warning:: There is a [Nim compiler bug](https://github.com/nim-lang/Nim/issues/19071) that prevents using types with a feature pharao can't do without. Sorry!
+```nim
+# /var/www/initdb-av0k2ja15v2l07rbwchexz48.nim
+# obscure URL is a crude but workable authentication method
+
+import db_connector/db_sqlite, strutils
+
+var db {.threadvar.}: DbConn
+
+db = open("foo.db", "", "", "")
+
+let version = try:
+  parseInt(db.getValue sql"SELECT version FROM version")
+except DbError:
+  db.exec sql" PRAGMA journal_mode=WAL "
+  db.exec sql" PRAGMA busy_timeout = 30000 "
+  0
+
+db.exec sql" BEGIN "
+
+if version < 1:
+  # use sqlite's fast-and-practical mode
+  # this is good enough for most web app needs
+
+  # create tables
+  db.exec sql" CREATE TABLE version (version INT) "
+  db.exec sql" INSERT INTO version (version) VALUES (0) "
+  db.exec sql" CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY AUTOINCREMENT, foo string) "
+
+db.exec sql"UPDATE version SET version=1"
+
+db.exec sql" COMMIT "
+
+
+```
+
+Then you can initialize the database and run the example program a few times.
+
+
+```
+$ curl localhost:2347/initdb-av0k2ja15v2l07rbwchexz48.nim
+$ curl localhost:2347/sqlite.nim
+1	dsaf
+$ curl localhost:2347/sqlite.nim
+1	dsaf
+2	safd
+$ curl localhost:2347/sqlite.nim
+1	dsaf
+2	safd
+3	sadf
+```
+
+This is a perfectly suitable starting point for a production web app. You may want to run the migration script on the command line, or use more advanced authentication.
+
+Personally, I prefer the typed tiny_sqlite.
+
+```
+nimble install tiny_sqlite
+```
+
+.. warning::
+  For security, keep your database files out of the web root.
+
+.. info::
+
+  A convenient way to do that is to start pharao from a current working directory that is not in the web root, such as /var/lib/pharao, and use relative paths such as "foo.db".
+
+
+```
+
+.. info :: There is a [Nim compiler bug](https://github.com/nim-lang/Nim/issues/19071) the author was unable to work around that prevents pharao files from having their own type definitions, they have to be put into imports. Sorry!
 
 ```nim
 # /var/www/types.nim
@@ -383,16 +449,16 @@ $ curl localhost:2347/imptypes.nim
 Useful things you can do with Pharao
 ------------------------------------
 
-The most obvious use for pharao are quick throwaway scripts, but there is nothing stopping you from building more involved applications as well.
+The most obvious use for pharao are quick throwaway scripts. Those are very very important, because they tend to evolve into more useful applications over time- and every little bit of friction you don't have makes you reach for your programming language more to solve problems. This is the main point why the author made pharao.
 
-While the examples above are more for introduction, these are secure mini web applications you can use as starting point and change into your own.
+Here are some small but real-world examples.
 
-Quick 'n clean forms
---------------------
+Quick email collect form
+------------------------
 
-There is a neat way to have old school web forms that work as expected with both form submit and history: Do a post, display error messages (if any) in the post,POST-and-redirect-with-message.
+This is the motivating example for pharao. Having a quick form to collect some data should be easy.
 
-The somewhat hairy vanilla javascript is made up for by being short.
+This is the fancy old-school version: It redirects with a cookie-based one-time message on success.
 
 **Collect emails into a file**
 
@@ -433,35 +499,32 @@ else:
 """
 ```
 
-
-
 Run in production
 -----------------
 
-The easiest way and most secure way tto run pharao on a Linux web server is with systemd. You can get an isolated system with its own user by creating this file:
+The easiest way and most secure way to run pharao on a Linux web server is with systemd. You can get an isolated system with its own user by creating the file below. systemd will create an isolated state directory in /var/lib/pharao for you, so if you open a database "foo.db" it will go into /var/lib/pharao/foo.db and be accessible only by the pharao user.
 
-This is of course also system administration work, but the advantage is that you only have to do it once to have any number of pharao applications.
 
 ```
 # /etc/systemd/system/pharao.service
 [Unit]
-Description=frueh
+Description=pharao
 After=network.target httpd.service
 Wants=network-online.target
 
 [Service]
 DynamicUser=True
-ExecStart=frueh
+ExecStart=pharao
 Restart=always
 NoNewPrivileges=yes
 PrivateDevices=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=full
-Environment=FRUEH_MAIL_FROM=carlo@capocasa.net
-Environment=FRUEH_MAIL_TO=carlo@capocasa.net
-StateDirectory=frueh
-WorkingDirectory=%S/frueh
+Environment=PHARAO_WWW_ROOT=/var/www
+Environment=PHARAO_LOG_LEVEL=INFO
+StateDirectory=pharao
+WorkingDirectory=%S/pharao
 
 [Install]
 WantedBy=multi-user.target
@@ -536,13 +599,13 @@ server {
   listen 80;
   listen [::]:80;
   
-  server_name ~^(?<subdomain>.+)\.capo\.casa$;
-  if (!-d /var/www/_.capo.casa/$subdomain) {
+  server_name ~^(?<subdomain>.+)\.example\.org$;
+  if (!-d /var/www/_.example.org/$subdomain) {
     return 444;
   }
-  root /var/www/_.capo.casa/$subdomain;
-  access_log /var/log/nginx/$subdomain.capo.casa.access.log;
-  error_log /var/log/nginx/$subdomain.capo.casa.error.log;
+  root /var/www/_.example.org/$subdomain;
+  access_log /var/log/nginx/$subdomain.example.org.access.log;
+  error_log /var/log/nginx/$subdomain.example.org.error.log;
 
   index index.html index.htm index.nim;
 
@@ -563,15 +626,14 @@ server {
 
 You may of course use any reverse proxy you like.
 
-Please refer to `letsencrypt` to add SSL.
+Combine this with a wildcard SSL certificate and you can create new sites extremely easily.
 
+Please refer to the `letsencrypt` to add SSL.
 
-Why is it called pharao?
-------------------------
+FAQ
+---
 
-Behind the scenes, pharao uses the mummy webserver to work with Nim source.
+Pharao acts as a source for the mummy webserver. And... the source... of a mummy... is a pharaoh! *Boom-tss*
 
-And... the source... of a mummy... is a pharao! *Boom-tss*
-
-And Pharaos have much in common with PHP. Both start with the letters P and H, are deformed by excessive inbreeding, and lord over vast empires.
+And a pharaoh have much in common with PHP! Both start with the letters P and H, lord over vast empires, and are deformed by excessive inbreeding.
 

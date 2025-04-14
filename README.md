@@ -40,6 +40,9 @@ $ curl localhost:2347/hello.nim
 Hello, ancient world!
 ```
 
+Simple examples
+---------------
+
 You can write any nim code
 ```nim
 # /var/www/rando.nim
@@ -77,6 +80,9 @@ I'm a rando.
 
 7917
 ```
+
+Reading data
+------------
 
 You can set headers and request variables
 
@@ -146,6 +152,9 @@ foo
 # in on disk or in database
 ```
 
+Fancy
+-----
+
 You can keep doing stuff after the request.
 
 ```nim
@@ -165,6 +174,9 @@ $ curl localhost:2347/stayingalive.nim & && tail -f /tmp/later.log
 done
 
 ```
+
+More than one file
+------------------
 
 Use includes to easily have different files
 
@@ -283,6 +295,9 @@ $ curl localhost:2347/badidea.nim
 sensitive user data
 $ # whoops
 ```
+
+Storing data
+------------
 
 You can use "global" variables. They only get written when your code is compiled or the server is restarted.
 
@@ -418,6 +433,9 @@ nimble install tiny_sqlite
 
 ```
 
+Limitatons
+----------
+
 .. info :: There is a [Nim compiler bug](https://github.com/nim-lang/Nim/issues/19071) the author was unable to work around that prevents pharao files from having their own type definitions, they have to be put into imports. Sorry!
 
 ```nim
@@ -466,21 +484,18 @@ $ curl localhost:2347/imptypes.nim
 ```
 
 
-Useful things you can do with Pharao
-------------------------------------
+Useful examples
+---------------
 
 The most obvious use for pharao are quick throwaway scripts. Those are very very important, because they tend to evolve into more useful applications over time- and every little bit of friction you don't have makes you reach for your programming language more to solve problems. This is the main point why the author made pharao.
 
 Here are some small but real-world examples.
 
-Quick email collect form
-------------------------
+**Fancy Email collect form **
 
 This is the motivating example for pharao. Having a quick form to collect some data should be easy.
 
 This is the fancy old-school version: It redirects with a cookie-based one-time message on success.
-
-**Collect emails into a file**
 
 ```nim
 # /var/www/collect.nim
@@ -650,8 +665,13 @@ Combine this with a wildcard SSL certificate and you can create new sites extrem
 
 Please refer to the `letsencrypt` to add SSL.
 
-FAQ
----
+Thanks
+------
+
+Pharao uses the mummy webserver which is so good it's the reason pharao seemed worth making. Thanks!!!
+
+About
+-----
 
 Pharao acts as a source for the mummy webserver. And... the source... of a mummy... is a pharaoh! *Boom-tss*
 

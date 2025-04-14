@@ -81,6 +81,29 @@ I'm a rando.
 7917
 ```
 
+You can use templating engines
+
+```nim
+# /var/www/template.nim
+import std/random, nimja/parser
+randomize()
+
+let battleCry = ["Hee", "Hoo", "Haa-ya"].sample
+compileTemplateStr """
+I'm a Nimja
+
+{{ battleCry }}!
+"""
+```
+
+```
+$ curl localhost:2347/nimja.nim
+```
+I'm a Nimja
+
+Haa-ya!
+```
+
 Reading data
 ------------
 
@@ -663,7 +686,7 @@ You may of course use any reverse proxy you like.
 
 Combine this with a wildcard SSL certificate and you can create new sites extremely easily.
 
-Please refer to the `letsencrypt` to add SSL.
+You can use [certbot](https://certbot.eff.org/) to get SSL certificates.
 
 Thanks
 ------

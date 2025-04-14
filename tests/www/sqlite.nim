@@ -1,19 +1,22 @@
 # /var/www/sqlite.nim
-import waterpark/sqlite
-#import db_connector/db_sqlite
-import random
-body = "foo"
-randomize()
-var asdf = "asdf"
-asdf.shuffle
 
-var db = newSqlitePool(10, "example.sqlite3")
-db.withConnection c:
-  discard
-#c.exec sql""" INSERT INTO foo (foo) VALUES (?) """, asdf
-#for row in c.fastRows(sql"SELECT * FROM foo"):
-#  body.add row[0]
-#  body.add "\t"
-#  body.add row[1]
-#  body.add "\n"
+#import waterpark/sqlite
+import random, os, db_connector/db_sqlite
+randomize(123)
+var asdf = "asdf"
+
+var db {.threadvar.}: DbConn
+let path = getTempDir() / "testpharao_sqlite.db"
+db = open(path,"","","")
+db.exec sql""" DROP TABLE IF EXISTS foo """
+db.exec sql""" CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, foo string) """
+db.exec sql""" INSERT INTO foo (foo) VALUES (?) """, asdf
+asdf.shuffle
+db.exec sql""" INSERT INTO foo (foo) VALUES (?) """, asdf
+asdf.shuffle
+db.exec sql""" INSERT INTO foo (foo) VALUES (?) """, asdf
+asdf.shuffle
+db.exec sql""" INSERT INTO foo (foo) VALUES (?) """, asdf
+for row in db.fastRows(sql"SELECT * FROM foo"):
+  echo row[0], "\t", row[1]
 

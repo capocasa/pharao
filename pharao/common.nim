@@ -7,4 +7,5 @@ type
   RequestProc* = proc(request: Request) {.nimcall,gcsafe.}
   LogProc* = proc(level: LogLevel, message: string) {.closure, gcsafe}
   InitProc* = proc(respondProc: RespondProc, logProc: LogProc, stdoutArg, stderrArg, stdinArg: File) {.nimcall,gcsafe.}
+  DeinitProc* = proc() {.nimcall,gcsafe.}
 

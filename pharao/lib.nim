@@ -29,11 +29,6 @@ when pharaoSourcePath == "":
   {.error: "Pharaoh dynamic library requires a --d:sourcePath, usually the pharoh server will take care of that for you".}
 
 # sets up GC and run main module on library init
-proc NimMain() {.cdecl, importc.}
-proc library_init() {.exportc, dynlib, cdecl.} =
-  NimMain()
-proc library_deinit() {.exportc, dynlib, cdecl.} =
-  GC_FullCollect()
 
 ## library specific state
 
@@ -107,6 +102,7 @@ proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
 # Initialization hook, called by pharao on loading library to
 # provide callables. Data could be provided too.
 proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc, stdoutArg, stderrArg, stdinArg: File) {.exportc,dynlib.} =
+  proc NimMain() {.cdecl, importc.}
   respondProc = respondProcArg
   log = logProc
   assert not respondProc.isNil, "Empty responder received"
@@ -119,4 +115,6 @@ proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc, stdoutArg, stderr
   stderr = stderrArg
   stdin = stdinArg
 
+proc pharaoDeinit() {.exportc,dynlib.} =
+  GC_FullCollect()
 

@@ -43,7 +43,6 @@ suite "tests for different source files":
 
   let curl = newCurly()
 
-
   test "bar":
     let r = curl.get("localhost:9999/bar.nim")
     check(r.code == 200)
@@ -118,7 +117,7 @@ suite "tests for different source files":
   test "sqlite":
     let r = curl.get("localhost:9999/sqlite.nim")
     check(r.code == 200)
-    check(r.body == "foo")
+    check(r.body == "1\tasdf\n2\tsdaf\n3\tdfsa\n4\tsdfa\n")
 
   test "stayingalive":
     let r = curl.get("localhost:9999/stayingalive.nim")

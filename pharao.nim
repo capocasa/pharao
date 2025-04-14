@@ -174,10 +174,17 @@ PHARAO_LOG_ERRORS       true
         # compile the source.
         #
 
+        # unload previous program
         if not route.libHandle.isNil:
+          let deinitProc = cast[DeinitProc](route.libHandle.symAddr("pharaoDeinit"))
+          if deinitProc.isNil:
+            if logErrors:
+              error("dynamic library $1 has no pharaoDeinit, unloading without cleanup for path $2" % [dynlibPath, route.path])
+          else:
+            deinitProc()
           route.libHandle.unloadLib
           route.libHandle = nil
-        let cmd = "$1 c --nimcache:$2 --app:lib --d:useMalloc --noMain --d:pharao.sourcePath=$3 -o:$4 -" % [nimCmd, nimCachePath, sourcePath, dynlibPath]
+        let cmd = "$1 c --nimcache:$2 --app:lib --d:useMalloc --d:pharao.sourcePath=$3 -o:$4 -" % [nimCmd, nimCachePath, sourcePath, dynlibPath]
         var env = newStringTable()
         for k, v in envPairs():
           if k notin env:

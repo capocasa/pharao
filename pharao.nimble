@@ -7,3 +7,7 @@ license = "MIT"
 requires "nim"
 requires "mummy"
 
+when not defined(release):
+  requires "curly"
+  requires "nimja"
+

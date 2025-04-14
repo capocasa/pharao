@@ -7,9 +7,13 @@
 #
 
 import
-  std/[macros,macrocache],
+  std/[macrocache,uri,strutils,pegs,re],
   ./common,
-  mummy
+  mummy,
+  mummy/multipart,
+  webby/urls
+
+import macros except body, error
 
 ## basic compile assertions
 
@@ -33,84 +37,68 @@ proc library_deinit() {.exportc, dynlib, cdecl.} =
 
 ## library specific state
 
-var
-  respondProc: RespondProc  # call web server responder
-  log: LogProc  # write to log
+import ./tools
 
-## logging tools
+const pharaoSourceCache = CacheTable"pharaoSource"
 
-# these are duplicated from pharao.nim so we only have to
-# receive the log proc on intialization
-
-proc debug(message: string) {.hint[XDeclaredButNotUsed]: off.} =
-  log(DebugLevel, message)
-proc info(message: string) {.hint[XDeclaredButNotUsed]: off.} =
-  log(InfoLevel, message)
-proc error(message: string) {.hint[XDeclaredButNotUsed]: off.} =
-  log(ErrorLevel, message)
-
-## user code preprocessing macros
-
-macro filterImportsOnly(source: typed): untyped =
-  result = newStmtList()
-  template filter(n: NimNode) =
-    if n.kind == nnkImportStmt or n.kind == nnkImportExceptStmt or n.kind == nnkFromStmt:
-      result.add(n)
-  if source[1].kind == nnkStmtList:
-    for n in source[1]:
-      filter(n)
-  else:
-    filter(source[1])
-
-macro filterNoImports(source: typed): untyped =
-  result = newStmtList()
-  template filter(n: NimNode) =
-    if n.kind == nnkImportStmt or n.kind == nnkImportExceptStmt or n.kind == nnkFromStmt:
-      discard
-    else:
-      result.add(n)
-  if source[1].kind == nnkStmtList:
-    for n in source[1]:
-      filter(n)
-  else:
-    filter(source[1])
-
-macro includePharaoSource(): untyped =
+macro includePharaoSource() =
   newNimNode(nnkIncludeStmt).add(newIdentNode(pharaoSourcePath))
 
-## Write imports from user-supplied code (but nothing else)
-var
-  # dummy vars
-  # just so the import macro can include sourcePath
-  # in this scope to extract and insert the import statements
-  # (those are not allowed in a proc)
-  code: int
-  headers: HttpHeaders
-  body: string
-  request: Request
+macro cachePharaoSource(source: typed) =
+  var
+    imports = newStmtList()
+    requestBody = newStmtList()
+  template filter(n: NimNode) =
+    if n.kind == nnkImportStmt or n.kind == nnkImportExceptStmt or n.kind == nnkFromStmt:
+      imports.add(n)
+    else:
+      requestBody.add(n)
+  if source[1].kind == nnkStmtList:
+    for n in source[1]:
+      filter(n)
+  else:
+    filter(source[1])
+  pharaoSourceCache["imports"] = imports
+  pharaoSourceCache["requestBody"] = requestBody
 
-filterImportsOnly(includePharaoSource)
+macro pharaoSourceImports(): untyped =
+  result=pharaoSourceCache["imports"]
+  #echo "I\n", result.treeRepr
+
+macro pharaoSourceRequestBody(): untyped =
+  result=pharaoSourceCache["requestBody"]
+  #echo "RB\n", result.treeRepr
+
+cachePharaoSource(includePharaoSource())
+
+#pharaoSourceImports()
+
 
 ## dynlib interface
 
-
 # main request proc
-proc pharaoRequest*(request: Request) {.exportc,dynlib.} =
-  
-  ## Interface is the request param and these local vars
-  var
-    code = 200
-    headers = @{"Content-Type":"text/html"}.HttpHeaders
-    body = ""
+proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
+
+  # init request vars
+  request = requestArg
+  code = 200
+  headers = @{"Content-Type":"text/html"}.HttpHeaders
+  body = ""
 
   # interface func to respond
   # manually to continue execution
   # after completed request
-  proc respond() =
-    respondProc(request, code, headers, body)
 
   ## Write user supplied code, minus imports
-  filterNoImports(includePharaoSource())
+  try:
+    pharaoSourceRequestBody()
+  except:
+    let e = getCurrentException()
+    const logErrors = true
+    if logErrors:
+      error(e.msg)
+    const outputErrors = true
+    respondProc(request, 500, headers, if outputErrors: e.msg else: "internal server error\n")
 
   # autorespond if not responded yet
   if not request.responded:
@@ -118,10 +106,17 @@ proc pharaoRequest*(request: Request) {.exportc,dynlib.} =
 
 # Initialization hook, called by pharao on loading library to
 # provide callables. Data could be provided too.
-proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc) {.exportc,dynlib.} =
+proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc, stdoutArg, stderrArg, stdinArg: File) {.exportc,dynlib.} =
   respondProc = respondProcArg
   log = logProc
   assert not respondProc.isNil, "Empty responder received"
   assert not logProc.isNil, "Empty logger received"
+
+  # these are only recommended to be used for debugging
+  # but without having them assigned programs segfault
+  # on access which is hard to debug
+  stdout = stdoutArg
+  stderr = stderrArg
+  stdin = stdinArg
 
 

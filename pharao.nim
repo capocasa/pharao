@@ -3,7 +3,7 @@ when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
 
 import
-  std/[os, osproc, parseopt,envvars,strutils,paths,tables,dynlib,times,strscans,locks,strformat],
+  std/[os, osproc, parseopt,envvars,strutils,paths,tables,dynlib,times,strscans,locks,strformat,strtabs],
   mummy, mummy/fileloggers,
   pharao/common
 
@@ -25,7 +25,7 @@ proc initPharaoServer() =
   let host = getEnv("PHARAO_HOST", "localhost")
   let wwwRoot = getEnv("PHARAO_WWW_ROOT", "/var/www")
   let dynlibRoot = getEnv("PHARAO_DYNLIB_PATH", "lib")
-  let nimCmd = getEnv("PHARAO_NIM_PATH", "nim")
+  let nimCmd = getEnv("PHARAO_NIM_COMMAND", "nim")
   let nimCachePath = getEnv("PHARAO_NIM_CACHE", "cache")
   let outputErrors = getEnv("PHARAO_OUTPUT_ERRORS", "true").parseBool
   let logErrors = getEnv("PHARAO_LOG_ERRORS", "true").parseBool
@@ -134,7 +134,7 @@ PHARAO_LOG_ERRORS       true
     let initProc = cast[InitProc](route.libHandle.symAddr("pharaoInit"))
     if initProc.isNil:
       raise newException(LibraryError, "dynamic library $1 has no pharaoInit, not loading route for path $2" % [dynlibPath, route.path])
-    initProc(respond, log)
+    initProc(respond, log, stdout, stderr, stdin)
     route.libModificationTime = dynlibPath.getLastModificationTime
 
   var routes: Table[string, PharaoRoute]
@@ -152,7 +152,7 @@ PHARAO_LOG_ERRORS       true
         route.initLibrary(dynlibPath)
       except LibraryError as e:
         if logErrors:
-          log(ErrorLevel, e.msg)
+          error(e.msg)
       routes[path] = route
 
   proc handler(request: Request) =
@@ -178,6 +178,10 @@ PHARAO_LOG_ERRORS       true
           route.libHandle.unloadLib
           route.libHandle = nil
         let cmd = "$1 c --nimcache:$2 --app:lib --d:useMalloc --noMain --d:pharao.sourcePath=$3 -o:$4 -" % [nimCmd, nimCachePath, sourcePath, dynlibPath]
+        var env = newStringTable()
+        for k, v in envPairs():
+          if k notin env:
+            env[k] = v
         let (output, exitCode) = execCmdEx(cmd, input="include pharao/lib")
         if exitCode == 0:
           log(DebugLevel, output)
@@ -185,7 +189,7 @@ PHARAO_LOG_ERRORS       true
           route.lock.release
           request.respond(500, defaultHeaders, if outputErrors: output else: "internal server error\n")
           if logErrors:
-            log(ErrorLevel, output)
+            error(output)
           return
         try:
           route.initLibrary(dynlibPath)
@@ -193,12 +197,13 @@ PHARAO_LOG_ERRORS       true
           route.lock.release
           request.respond(500, defaultHeaders, if outputErrors: e.msg else: "internal server error\n")
           if logErrors:
-            log(ErrorLevel, e.msg)
+            error(e.msg)
           return
       route.lock.release
       route.requestProc(request)
       if not request.responded:
         request.respond(503, defaultHeaders, "unavailable\n")
+
     else:
       request.respond(404, defaultHeaders, "not found\n")
 

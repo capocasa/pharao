@@ -22,7 +22,7 @@ type
 proc initPharaoServer() =
 
   proc usage() =
-    stderr.write "Invalid option or argument, run with optoin --help for more information\n"
+    stderr.write "Invalid option or argument, run with option --help for more information\n"
     quit(1)
 
   proc help() =
@@ -35,7 +35,7 @@ root directory and serve the result.
 -h, --help              Show this help
 -p, --port:PORT         Set port
 -H, --host:HOST         Set host
--W, --wwwroot:WWWROOT   Set the web root
+-W, --www-root:WWWROOT   Set the web root
 -e, --env:ENV           Set an environment file
 
 The following environment variables are read for configuration.
@@ -81,15 +81,19 @@ Option takes precedence before environment value from file before environment.
           usage()
         help()
       of "H":
-        if val != "":
+        if val == "":
           usage()
         host = val
       of "p":
-        if val != "":
+        if val == "":
           usage()
         port = val.parseInt.Port
+      of "W":
+        if val == "":
+          usage()
+        wwwRoot = val
       of "e":
-        if val != "":
+        if val == "":
           usage()
         envFile = val
       else:
@@ -101,17 +105,23 @@ Option takes precedence before environment value from file before environment.
           usage()
         help()
       of "host":
-        if val != "":
+        if val == "":
           usage()
         host = val
       of "port":
         if val != "":
           usage()
         port = val.parseInt.Port
+      of "www-root":
+        if val == "":
+          usage()
+        wwwRoot = val
       of "env":
-        if val != "":
+        if val == "":
           usage()
         envFile = val
+      else:
+        usage()
     of cmdArgument:
       usage()
 

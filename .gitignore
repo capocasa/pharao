@@ -1,4 +1,4 @@
-pharao.out
-lib
-cache
 tags
+.env
+bin
+

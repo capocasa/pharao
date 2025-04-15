@@ -23,12 +23,12 @@ proc add*(r: Result, s: string) =
 template echo*(x: varargs[string, `$`]) =
   for s in x:
     body.add s
-  body.add "\n" 
+  body.add "\n"
 
 template `=`*(x: varargs[string, `$`]) =
   for s in x:
     body.add s
-  body.add "\n" 
+  body.add "\n"
 
 ## logging tools
 

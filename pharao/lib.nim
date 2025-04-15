@@ -7,7 +7,7 @@
 #
 
 import
-  std/[macrocache,uri,strutils,pegs,re],
+  std/[macrocache,uri,strutils,pegs,re,compilesettings],
   ./common,
   mummy,
   mummy/multipart,
@@ -114,6 +114,8 @@ proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc, stdoutArg, stderr
   stdout = stdoutArg
   stderr = stderrArg
   stdin = stdinArg
+
+  debug("initialized " & querySetting(SingleValueSetting.nimcacheDir))
 
 proc pharaoDeinit() {.exportc,dynlib.} =
   GC_FullCollect()

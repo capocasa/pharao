@@ -581,6 +581,7 @@ ProtectHome=yes
 ProtectSystem=full
 Environment=PHARAO_WWW_ROOT=/var/www
 Environment=PHARAO_LOG_LEVEL=INFO
+Environment=PHARAO_LOG_PATTERN=[$2] $3
 StateDirectory=pharao
 WorkingDirectory=%S/pharao
 
@@ -617,10 +618,10 @@ journalctl -u pharao --since '5 minutes ago' -f
 Other ways to run daemons may of course be used.
 
 
-Use with reverse proxy
-----------------------
+Reverse proxy configuration
+---------------------------
 
-Most of us like to run web applications with a public facing reverse proxy server that handles SSL and static files, passing apprequests to our program.
+Most of us like to run web applications with a public facing reverse proxy server that handles SSL and static files, passing apprequests to our program
 
 This uses the same mechanism as a PHP setup to only run .nim files through pharao, let nginx handle static files. You still benefit from Nim's superior performance.
 
@@ -650,7 +651,7 @@ server {
 }
 ```
 
-Something I like to do is have a few domains where each subdomain has a directory for even more convenience.
+Something I like to do is have a few domains where each subdomain has a directory for even more convenience. You create directory and file `/var/www/_.example.org/foo/bar.nim` and can call it at `curl foo.example.org/bar.nim`.
 
 ```
 server {
@@ -672,7 +673,8 @@ server {
   }
 
   location ~ \.nim$ {
-    proxy_pass http://127.0.0.1:2347;
+    rewrite ^/(.*)$ /$subdomain/$1 break;
+    proxy_pass http://127.0.0.1:2347
     proxy_buffering off;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Host $host;
@@ -680,6 +682,11 @@ server {
   }
 }
 
+```
+
+```
+# add this line to pharao.service
+Environment=PHARAO_WWW_ROOT=/var/www/_.example.org
 ```
 
 You may of course use any reverse proxy you like.

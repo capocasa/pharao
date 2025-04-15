@@ -8,7 +8,7 @@ bin = @["pharao"]
 binDir = "bin"
 
 requires "nim >= 2.0.0"
-requires "mummy >= 0.4.3"
+requires "mummy >= 0.4.6"
 
 when not defined(release):
   requires "curly"

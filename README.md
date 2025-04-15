@@ -489,8 +489,6 @@ nimble install tiny_sqlite
   A convenient way to do that is to start pharao from a current working directory that is not in the web root, such as /var/lib/pharao, and use relative paths such as "foo.db".
 
 
-```
-
 Configuration options
 ---------------------
 

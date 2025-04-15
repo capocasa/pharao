@@ -136,6 +136,26 @@ $ curl localhost:2347/query.nim?a=b
 b
 ```
 
+Showing a specific page for each query string key is a great way to handle different requests in one file. Old school web apps call this having "actions". In this case, the "action" is `foo` or `bar`. 
+
+# /var/www/actions.nim
+if "foo" in request.queryParams:
+  echo "Foo"
+elif "bar" in request.queryParams"
+  echo "Bar"
+else:
+  code = 404
+  echo "Not found"
+
+```
+$ curl localhost:2347/actions.nim?foo
+<h1>Foo</h1>
+$ curl localhost:2347/actions.nim?bar
+<h2>Bar</h2>
+$ curl localhost:2347/actions.nim?fuz
+Not found
+```
+
 Or post parameters 
 
 ```nim
@@ -173,6 +193,21 @@ $ curl -F uploadme=@/tmp/foo.txt localhost:2347/multi.nim
 foo
 # the server just returns file content but could store
 # in on disk or in database
+```
+
+You can use JSON
+
+```nim
+# /var/www/json.nim
+import std/json
+headers["Content-Type"] = "application/json"
+
+if request.httpMethod == "POST":
+  let j = request.body.parseJson
+  echo j{"foo"}.getStr()
+else:
+  let j = %* { "foo" : "bar" }
+  echo j
 ```
 
 Fancy
@@ -572,13 +607,14 @@ Wants=network-online.target
 
 [Service]
 DynamicUser=True
-ExecStart=pharao
+ExecStart=/opt/nimble/bin/pharao
 Restart=always
 NoNewPrivileges=yes
 PrivateDevices=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=full
+Environment=PHARAO_NIM_COMMAND=/opt/nim/bin/nim
 Environment=PHARAO_WWW_ROOT=/var/www
 Environment=PHARAO_LOG_LEVEL=INFO
 Environment=PHARAO_LOG_PATTERN=[$2] $3
@@ -589,18 +625,40 @@ WorkingDirectory=%S/pharao
 WantedBy=multi-user.target
 ```
 
-And then running and enabling the service
+A good way to run nimble binaries with systemd dynamic users is with a system-wide Nim installation.
+
+```sh
+$ export VERSION=2.2.2
+$ wget https://nim-lang.org/download/nim-$VERSION-linux_x64.tar.xz
+$ tar -xvJf nim-$VERSION-linux_x64.tar.xz -C /opt
+$ ln -sf nim-$VERSION /opt/nim
+```
+
+Repeat the commands above to upgrade, or run only the last to switch versions.
+
+Now add your paths so you can call the compiler and use installed packages. Log out and back in after creating this file.
 
 ```
-$ systemd daemon-reload
-$ systemd start pharao
-$ systemd enable pharao
+# /etc/profile.d/nim.sh
+export NIMBLE_DIR=/opt/nimble
+PATH=$PATH:/opt/nim/bin:/opt/nimble/bin
+```
+
+Now install pharao. It will go to /opt/nimble/bin/pharao
+
+```
+
+Now you can start your pharao service, and enable it to run it at boot.
+
+```
+$ systemctl start pharao
+$ systemctl enable pharao
 ```
 
 Check it works
 
 ```
-systemd status pharao
+systemctl status pharao
 ```
 
 Check logs
@@ -614,8 +672,6 @@ Trace logs
 ```
 journalctl -u pharao --since '5 minutes ago' -f
 ```
-
-Other ways to run daemons may of course be used.
 
 
 Reverse proxy configuration
@@ -642,6 +698,7 @@ server {
   }
 
   location ~ \.nim$ {
+    rewrite ^/(.*)$ /example.org/$1 break;
     proxy_pass http://127.0.0.1:2347;
     proxy_buffering off;
     proxy_set_header X-Real-IP $remote_addr;
@@ -654,6 +711,8 @@ server {
 Something I like to do is have a few domains where each subdomain has a directory for even more convenience. You create directory and file `/var/www/_.example.org/foo/bar.nim` and can call it at `curl foo.example.org/bar.nim`.
 
 ```
+# /etc/nginx/sites-available/_.example.org
+
 server {
   listen 80;
   listen [::]:80;
@@ -684,26 +743,43 @@ server {
 
 ```
 
-```
-# add this line to pharao.service
-Environment=PHARAO_WWW_ROOT=/var/www/_.example.org
-```
-
 You may of course use any reverse proxy you like.
 
 Combine this with a wildcard SSL certificate and you can create new sites extremely easily.
 
 You can use [certbot](https://certbot.eff.org/) to get SSL certificates.
 
+Inner workings
+--------------
+
+Pharao contains a mummy webserver and a single request handler for everything.
+
+When a request comes in, the web root is checked for a file with the relative path of the request. If the file exists, it is wrapped in a special boilerplate file in `pharao/lib`, and the interface `pharao/tools` is imported before compiling it into a request handler in a dynamic library that is called to process the request. On subsequent requests, a recompile is only done if the source file is newer than the library file. Existing compiled requests get loaded on boot so there is no unnecessary compiling.
+
+Limitations
+-----------
+
+- Even though mummy is strong on websockets, pharao doesn't support them yet. It would be cool though! It would take a really cool simplistic API to be worth it though. Can you think of one?
+- Pharao has no mechanism for handling static files and is unaware of the concept of file extensions. The assumption is that your proxy server will handle that. A quick workaround is to use a one-liner source code filter for e.g. a CSS file. This would be rather interesting to build but would require a mummy patch to support download streaming, in the author's humble opinion.
+- Pharao does not cover all CGI features yet, for example, there is no mechanism to have /foo.nim/bar/fuz call foo.nim with /bar/fuz in the request path. Also, pharao is usually pointed at the web root /var/www, so if you have a file in a virtual host /var/www/example.org/foo.nim, then /example.org will be part of the path /example.org/foo.nim, as far as pharao is concerned. CGI resolves this by shortening the path to /foo.nim. This is quite donable with pharao too, it just hasn't been done yet.
+
 Thanks
 ------
 
-Pharao uses the mummy webserver which is so good it's the reason pharao seemed worth making. Thanks!!!
+Pharao uses the [mummy](https://github.com/guzba/mummy) webserver which is so good it's the reason pharao seemed worth making. Thanks!!!
 
-About
------
+The mechanism is inspired by [nimcr](https://github.com/PMunch/nimcr). Thanks!!!
+
+What's in a name?
+-----------------
+
+*Why is it called Pharao?*
 
 Pharao acts as a source for the mummy webserver. And... the source... of a mummy... is a pharaoh! *Boom-tss*
 
 And a pharaoh have much in common with PHP! Both start with the letters P and H, lord over vast empires, and are deformed by excessive inbreeding.
+
+*Pharaoh isn't spelled Pharao!*
+
+"Pharaoh" is spelled with trailing "h" in english, but we use the German spelling "Pharao" everywhere.
 

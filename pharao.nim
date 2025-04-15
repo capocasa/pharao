@@ -294,13 +294,13 @@ Option takes precedence before environment value from file before environment.
           return
       route.lock.release
       route.requestProc(request)
-      info($request)
       if not request.responded:
         error("Internal error, no request response from $1" % request.path)
         request.respond(503, defaultHeaders, "unavailable\n")
 
     else:
       request.respond(404, defaultHeaders, "not found\n")
+    info($request)
 
   let server = newServer(handler)
   info("Pharao $1 wrapped to $2:$3" % [wwwRoot, host, $port.int])

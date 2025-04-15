@@ -647,6 +647,10 @@ PATH=$PATH:/opt/nim/bin:/opt/nimble/bin
 Now install pharao. It will go to /opt/nimble/bin/pharao
 
 ```
+$ nimble install pharao
+$ ls /opt/nimble/bin/pharao
+/opt/nimble/bin/pharao  # yep, it's there
+```
 
 Now you can start your pharao service, and enable it to run it at boot.
 

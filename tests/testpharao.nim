@@ -1,14 +1,20 @@
-import std/[strutils, os, osproc, strtabs,exitprocs,unittest,compilesettings, pegs,streams], curly, webby
-
+import std/[strutils,os,osproc,strtabs,exitprocs,unittest,pegs,streams], curly, webby
 
 suite "tests for different source files":
 
-  let wd = currentSourcePath().parentDir.parentDir
-  let wwwRoot = currentSourcePath().parentDir / "www"
+  let testDir = currentSourcePath().parentDir
+  let wwwRoot = testdir / "www"
+  let packageDir = testDir.parentDir
+  let binDir = packageDir / "bin"
+  let pharaoCmd = binDir / "pharao"
+
   let tmp = getTempDir()
 
   let dynlibPath = tmp / "pharaoTestLib"
   let cachePath = tmp / "pharaoTestCache"
+  let workingDir = tmp / "pharaoWorkingDir"
+
+  createDir workingDir
 
   const nimblePaths = querySettingSeq(MultipleValueSetting.nimblePaths)
   var args: seq[string]
@@ -28,7 +34,10 @@ suite "tests for different source files":
 
   removeDir dynlibPath
 
-  let p = startProcess("./pharao.out", wd, args, env, {poDaemon,poInteractive,poEvalCommand,poParentStreams})
+  if not fileExists(pharaoCmd):
+    raise newException(AssertionDefect, "Missing pharao binary at $1, please build pharao before running tests" % pharaoCmd)
+
+  let p = startProcess(pharaoCmd, workingDir, args, env, {poDaemon,poInteractive,poEvalCommand,poParentStreams})
   addExitProc proc() =
     p.terminate
     for i in 1..20:
@@ -37,7 +46,6 @@ suite "tests for different source files":
       else:
         return
     p.kill
-
 
   sleep 100
 

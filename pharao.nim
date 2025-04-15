@@ -3,7 +3,7 @@ when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
 
 import
-  std/[os, osproc, parseopt,envvars,strutils,paths,tables,dynlib,times,strscans,locks,strtabs,streams,parsecfg],
+  std/[os, osproc, parseopt,envvars,strutils,tables,dynlib,times,strscans,locks,strtabs,streams,parsecfg],
   mummy, mummy/fileloggers,
   pharao/common
 
@@ -161,6 +161,8 @@ Option takes precedence before environment value from file before environment.
     host = byEnv("PHARAO_HOST", "localhost")
   if wwwRoot == "":
     wwwRoot = byEnv("PHARAO_WWW_ROOT", "/var/www")
+  if not wwwRoot.isAbsolute:
+    wwwRoot = getCurrentDir() / wwwRoot
 
   let dynlibRoot = byEnv("PHARAO_DYNLIB_PATH", "lib")
   let nimCmd = byEnv("PHARAO_NIM_COMMAND", "nim")

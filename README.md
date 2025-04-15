@@ -491,6 +491,49 @@ nimble install tiny_sqlite
 
 ```
 
+Configuration options
+---------------------
+
+You can do some general configuration on the command line, and the nitty gritty with environment variables, or an .env file.
+
+```
+$ pharao --help
+
+Usage: pharao [options]
+
+Starts a web server that will compile and execute Nim files in a web
+root directory and serve the result.
+
+-h, --help              Show this help
+-p, --port:PORT         Set port
+-H, --host:HOST         Set host
+-W, --www-root:WWWROOT   Set the web root
+-e, --env:ENV           Set an environment file
+
+The following environment variables are read for configuration.
+
+Variable              Default value
+
+PHARAO_PORT                  2347                         The port to listen on
+PHARAO_HOST                  localhost                    The host to bind to
+PHARAO_WWW_ROOT              /var/www                     The web root
+PHARAO_DYNLIB_PATH           lib                          Compiled code path
+PHARAO_NIM_COMMAND           nim                          Nim command
+PHARAO_NIM_ARGS                                           Additional compiler arguments
+PHARAO_NIM_CACHE             cache                        Nim cache directory
+PHARAO_OUTPUT_ERRORS         true                         Add errors to response body
+PHARAO_LOG_ERRORS            true                         Add errors to log file
+PHARAO_LOG_FILE              -                            Log file path or - for stdout
+PHARAO_LOG_LEVEL             DEBUG                        Minimum level to log, DEBUG INFO or ERROR
+PHARAO_LOG_DATETIME_PATTERN  yyyy-MM-dd'T'HH:mm:sszzz     Nim datetime format pattern for log
+PHARAO_LOG_PATTERN           [$1 $2] $3                   Log format with $1 date, $2 level, $3 message
+
+Option takes precedence before environment value from file before environment.
+
+```
+
+
+
 Limitatons
 ----------
 

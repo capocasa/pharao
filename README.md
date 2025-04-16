@@ -52,7 +52,7 @@ randomize()
 
 body.add "I'm a rando.\n\n"
 body.add $rand(10000)
-body.add "\n|
+body.add "\n"
 ```
 
 ```

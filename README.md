@@ -98,7 +98,6 @@ I'm a Nimja
 
 ```
 $ curl localhost:2347/nimja.nim
-```
 I'm a Nimja
 
 Haa-ya!
@@ -138,6 +137,7 @@ b
 
 Showing a specific page for each query string key is a great way to handle different requests in one file. Old school web apps call this having "actions". In this case, the "action" is `foo` or `bar`. 
 
+```nim
 # /var/www/actions.nim
 if "foo" in request.queryParams:
   echo "Foo"
@@ -146,6 +146,8 @@ elif "bar" in request.queryParams"
 else:
   code = 404
   echo "Not found"
+
+```
 
 ```
 $ curl localhost:2347/actions.nim?foo
@@ -281,9 +283,8 @@ proc foo*() =
 I was imported!!!
 ```
 
-
-.. warning::
-  For security, keep your imports and includes out of your web root (recommended) or make sure the module scope doesn't do anything.
+> [!CAUTION]
+> For security, keep your imports and includes out of your web root (recommended) or make sure the module scope doesn't do anything.
 
 This is ok
 
@@ -388,11 +389,10 @@ body = db["text"]
 
 ```
 
-.. info ::
-    every pharao program runs inside one of a fixed number worker threads, which are sub-programs that run within pharao and have access to the same data. If you mark a variable `{.global.}` to keep it around to make your program faster, you have to make sure that any changes to that variable are done in a "thread safe" way.
-
-    The easiest way to have thread safety is to use libraries that already are written that way, as LimDB is. Just use it.
-
+> [!NOTE]  
+> every pharao program runs inside one of a fixed number worker threads, which are sub-programs that run within pharao and have access to the same data. If you mark a variable `{.global.}` to keep it around to make your program faster, you have to make sure that any changes to that variable are done in a "thread safe" way.
+>
+> The easiest way to have thread safety is to use libraries that already are written that way, as LimDB is. Just use it.
 
 
 Sometimes it's more useful for each worker to have its own copy of a variable that gets re-used each time a request is handled by that worker. That way, you have about 40 copies of the variable, but no more.
@@ -430,7 +430,7 @@ import db_connector/db_sqlite, strutils
 
 var db {.threadvar.}: DbConn
 
-db = open("foo.db", "", "", "")
+db = open(`"foo.db", "", "", "")
 
 let version = try:
   parseInt(db.getValue sql"SELECT version FROM version")
@@ -481,18 +481,17 @@ Personally, I prefer the typed tiny_sqlite.
 nimble install tiny_sqlite
 ```
 
-.. warning::
-  For security, keep your database files out of the web root.
+> [!CAUTION]
+> For security, keep your database files out of the web root.
 
-.. info::
-
-  A convenient way to do that is to start pharao from a current working directory that is not in the web root, such as /var/lib/pharao, and use relative paths such as "foo.db".
+> [!NOTE]  
+> A convenient way to do that is to start pharao from a current working directory that is not in the web root, such as `/var/lib/pharao`, and use relative paths such as `foo.db`.
 
 
 Configuration options
 ---------------------
 
-You can do some general configuration on the command line, and the nitty gritty with environment variables, or an .env file.
+You can do some general configuration on the command line, and the nitty gritty with environment variables, or an `.env` file.
 
 ```
 $ pharao --help
@@ -535,7 +534,7 @@ Option takes precedence before environment value from file before environment.
 Limitatons
 ----------
 
-.. info :: There is a [Nim compiler bug](https://github.com/nim-lang/Nim/issues/19071) the author was unable to work around that prevents pharao files from having their own type definitions, they have to be put into imports. Sorry!
+There is a [Nim compiler bug](https://github.com/nim-lang/Nim/issues/19071) the author was unable to work around that prevents pharao files from having their own type definitions, they have to be put into imports. Sorry!
 
 ```nim
 # /var/www/types.nim
@@ -636,7 +635,7 @@ else:
 Run in production
 -----------------
 
-The easiest way and most secure way to run pharao on a Linux web server is with systemd. You can get an isolated system with its own user by creating the file below. systemd will create an isolated state directory in /var/lib/pharao for you, so if you open a database "foo.db" it will go into /var/lib/pharao/foo.db and be accessible only by the pharao user.
+The easiest way and most secure way to run pharao on a Linux web server is with systemd. You can get an isolated system with its own user by creating the file below. systemd will create an isolated state directory in `/var/lib/pharao` for you, so if you open a database `foo.db` it will go into `/var/lib/pharao/foo.db` and be accessible only by the pharao user.
 
 
 ```

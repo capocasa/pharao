@@ -77,7 +77,7 @@ proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
   # init request vars
   request = requestArg
   code = 200
-  headers = @{"Content-Type":"text/html"}.HttpHeaders
+  headers = @{"Content-Type":"text/html; charset=utf-8"}.HttpHeaders
   body = ""
 
   # interface func to respond

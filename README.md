@@ -52,7 +52,7 @@ randomize()
 
 body.add "I'm a rando.\n\n"
 body.add $rand(10000)
-body.add "\n|
+body.add "\n"
 ```
 
 ```
@@ -109,6 +109,7 @@ Reading data
 You can set headers and request variables
 
 ```nim
+# /var/www/yowzy.nim
 headers["Content-Type"] = "text/plain"
 body = "Yowzy\n"
 code = 409
@@ -191,7 +192,7 @@ multipart supports file uploads
 
 ```
 $ echo foo > /tmp/foo.txt
-$ curl -F uploadme=@/tmp/foo.txt localhost:2347/multi.nim
+$ curl -F foo=@/tmp/foo.txt localhost:2347/multi.nim
 foo
 # the server just returns file content but could store
 # in on disk or in database
@@ -255,7 +256,7 @@ echo "that"
 ```
 
 ```sh
-$ localhost:2347/this.nim
+$ curl localhost:2347/this.nim
 this
 that
 ```
@@ -657,7 +658,9 @@ ProtectSystem=full
 Environment=PHARAO_NIM_COMMAND=/opt/nim/bin/nim
 Environment=PHARAO_WWW_ROOT=/var/www
 Environment=PHARAO_LOG_LEVEL=INFO
-Environment=PHARAO_LOG_PATTERN=[$2] $3
+Environment=PHARAO_LOG_PATTERN="[$2] $3"
+# systemd>=254 noexec by default
+ExecPaths=/var/lib/pharao
 StateDirectory=pharao
 WorkingDirectory=%S/pharao
 

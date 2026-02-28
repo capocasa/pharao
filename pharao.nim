@@ -1,9 +1,8 @@
-
 when not defined(useMalloc):
   {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
 
 import
-  std/[os, osproc, parseopt,envvars,strutils,tables,dynlib,times,strscans,locks,strtabs,streams,parsecfg],
+  std/[os, osproc, parseopt,envvars,strutils,sharedtables,dynlib,times,strscans,locks,strtabs,streams,parsecfg],
   mummy, mummy/fileloggers,
   pharao/common
 
@@ -238,7 +237,8 @@ Option takes precedence before environment value from file before environment.
     initProc(respond, log, stdout, stderr, stdin)
     route.libModificationTime = dynlibPath.getLastModificationTime
 
-  var routes: Table[string, PharaoRoute]
+  var routes: SharedTable[string, PharaoRoute]
+  routes.init()
 
   ## load existing dynlibs into routes on startup
   createDir(dynlibRoot)
@@ -320,4 +320,3 @@ Option takes precedence before environment value from file before environment.
 
 when isMainModule and appType == "console":
   initPharaoServer()
-

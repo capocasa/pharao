@@ -13,6 +13,8 @@ type
     libModificationTime: Time
     requestProc: RequestProc
     lock: Lock
+    refCount: int
+    cond: Cond
   PharaoRoute = ref PharaoRouteObj
 
 # pharao server
@@ -191,6 +193,8 @@ Option takes precedence before environment value from file before environment.
     new(result)
     result.path = path
     result.lock.initLock
+    result.cond.initCond
+    result.refCount = 0
 
   proc `$`(level: LogLevel): string =
     case level
@@ -263,15 +267,15 @@ Option takes precedence before environment value from file before environment.
 
       var route = routes.mgetOrPut(request.path, newPharaoRoute(request.path))
 
-      # lock route (but now other routes) during entire compilation. could possibly be optimized
-      # in several ways but unsure whether any of them are good idea
       route.lock.acquire
+      
+      # wait for in-flight requests before recompiling
       if route.libModificationTime < sourcePath.getLastModificationTime:
+        while route.refCount > 0:
+          route.cond.wait(route.lock)
+        
         let dynlibPath = dynlibRoot / request.path.parentDir / DynlibFormat % request.path.lastPathPart
         createDir(dynlibPath.parentDir)
-
-        # compile the source.
-        #
 
         # unload previous program
         if not route.libHandle.isNil:
@@ -304,8 +308,19 @@ Option takes precedence before environment value from file before environment.
           request.respond(500, defaultHeaders, if outputErrors: e.msg else: "internal server error\n")
           error(e.msg)
           return
+      
+      # increment refcount before releasing lock and executing
+      inc route.refCount
       route.lock.release
-      route.requestProc(request)
+      
+      try:
+        route.requestProc(request)
+      finally:
+        route.lock.acquire
+        dec route.refCount
+        route.cond.signal
+        route.lock.release
+      
       if not request.responded:
         error("Internal error, no request response from $1" % request.path)
         request.respond(503, defaultHeaders, "unavailable\n")

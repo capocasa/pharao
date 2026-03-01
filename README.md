@@ -830,3 +830,11 @@ And a pharaoh have much in common with PHP! Both start with the letters P and H,
 
 "Pharaoh" is spelled with trailing "h" in english, but we use the German spelling "Pharao" everywhere.
 
+Changelog
+---------
+```
+0.1.2    Fix occasional thread safety related freeze
+0.1.1    Fix relative wwwroot paths and command line switches
+0.1.0    Initial release
+```
+

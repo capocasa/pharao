@@ -1,5 +1,5 @@
 
-version = "0.1.3"
+version = "0.1.4"
 author = "Carlo Capocasa"
 description = "Compile, run and serve Nim files on the fly in a www directory like PHP"
 license = "MIT"

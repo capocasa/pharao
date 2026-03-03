@@ -182,7 +182,9 @@ Option takes precedence before environment value from file before environment.
       echo "Invalid PHARAO_LOG_LEVEL, must be DEBUG, INFO or ERROR"
       quit(2)
 
-  let logDateTimePattern = byEnv("PHARAO_LOG_DATETIME_PATTERN", "yyyy-MM-dd'T'HH:mm:sszzz")
+  # Default to UTC format - Nim's local() timezone uses C's localtime() which
+  # is not thread-safe and causes SIGSEGV in mummy's worker threads
+  let logDateTimePattern = byEnv("PHARAO_LOG_DATETIME_PATTERN", "yyyy-MM-dd'T'HH:mm:ss'Z'")
   let logPattern = byEnv("PHARAO_LOG_PATTERN", "[$1 $2] $3") & "\n"
 
   let logger = newFileLogger(if logFile == "-": stdout else: logFile.open(fmAppend))
@@ -217,7 +219,7 @@ Option takes precedence before environment value from file before environment.
       discard
     var formattedMessage = ""
     for line in message.splitLines:
-      formattedMessage.add logPattern % [now().format(logDateTimePattern), $level, line]
+      formattedMessage.add logPattern % [now().utc.format(logDateTimePattern), $level, line]
     logger.log(level, formattedMessage[0..^2])
 
   proc error(message: string) {.hint[XDeclaredButNotUsed]: off.} =

@@ -833,6 +833,7 @@ And a pharaoh have much in common with PHP! Both start with the letters P and H,
 Changelog
 ---------
 ```
+0.1.3    Fix thread safety crash in shared route objects
 0.1.2    Fix occasional thread safety related freeze
 0.1.1    Fix relative wwwroot paths and command line switches
 0.1.0    Initial release

@@ -15,7 +15,7 @@ type
     lock: Lock
     refCount: int
     cond: Cond
-  PharaoRoute = ref PharaoRouteObj
+  PharaoRoute = ptr PharaoRouteObj
 
 # pharao server
 # handle requests, compile .nim file in web root to dynlib and load
@@ -190,7 +190,7 @@ Option takes precedence before environment value from file before environment.
   ## server utility procs
 
   proc newPharaoRoute(path: string): PharaoRoute =
-    new(result)
+    result = createShared(PharaoRouteObj)
     result.path = path
     result.lock.initLock
     result.cond.initCond

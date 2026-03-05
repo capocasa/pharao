@@ -7,7 +7,7 @@
 #
 
 import
-  std/[macrocache,uri,strutils,pegs,re,compilesettings],
+  std/[macrocache,uri,strutils,pegs,re,compilesettings,os],
   ./common,
   mummy,
   mummy/multipart,
@@ -17,8 +17,6 @@ import macros except body, error
 
 ## basic compile assertions
 
-when not defined(useMalloc):
-  {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
 
 when appType != "lib":
   {.error: "Pharaoh dynamic library must be compiled with params '--app:lib'"}
@@ -35,38 +33,82 @@ when pharaoSourcePath == "":
 import ./tools
 
 const pharaoSourceCache = CacheTable"pharaoSource"
+const pharaoSourceDir = pharaoSourcePath.parentDir
 
-macro includePharaoSource() =
-  newNimNode(nnkIncludeStmt).add(newIdentNode(pharaoSourcePath))
-
-macro cachePharaoSource(source: typed) =
+# Parse as untyped AST so variables are resolved in function scope,
+# not module scope. This prevents user vars from becoming shared globals.
+# NOTE: Source code filters (#? stdtmpl) are not supported - they can't
+# be parsed by parseStmt and are inherently not thread-safe.
+macro cachePharaoSource() =
+  let sourceCode = staticRead(pharaoSourcePath)
+  let ast = parseStmt(sourceCode)
   var
     imports = newStmtList()
     requestBody = newStmtList()
+
+  # Resolve relative import paths to absolute paths based on source directory
+  # Only resolve if the local file actually exists; otherwise leave as-is
+  # (for nimble packages, stdlib, etc.)
+  proc resolveImportPath(n: NimNode): NimNode =
+    if n.kind == nnkIdent:
+      # Bare identifier like `import foo`
+      let localPath = pharaoSourceDir / n.strVal & ".nim"
+      if fileExists(localPath):
+        # Local file exists - resolve to absolute path (without .nim extension)
+        result = newStrLitNode(pharaoSourceDir / n.strVal)
+      else:
+        # Not a local file - leave as-is (nimble package or stdlib)
+        result = n
+    elif n.kind == nnkInfix and n[0].kind == nnkIdent and n[0].strVal == "/":
+      # Path like `foo/bar` or `std/random` - resolve first component if local
+      let first = n[1]
+      if first.kind == nnkIdent and first.strVal != "std":
+        let localPath = pharaoSourceDir / first.strVal & ".nim"
+        if fileExists(localPath):
+          var newN = n.copyNimTree()
+          newN[1] = newStrLitNode(pharaoSourceDir / first.strVal)
+          result = newN
+        else:
+          result = n
+      else:
+        result = n
+    elif n.kind == nnkPrefix and n[0].kind == nnkIdent and n[0].strVal == "./":
+      # Explicit relative like `import ./foo` - always resolve
+      result = n.copyNimTree()
+      if n[1].kind == nnkIdent:
+        result[1] = newStrLitNode(pharaoSourceDir / n[1].strVal)
+    else:
+      result = n
+
+  proc resolveImportStmt(n: NimNode): NimNode =
+    result = n.copyNimTree()
+    # Import children start at index 0 for nnkImportStmt
+    for i in 0..<result.len:
+      if result[i].kind in {nnkIdent, nnkInfix, nnkPrefix}:
+        result[i] = resolveImportPath(result[i])
+
   template filter(n: NimNode) =
     if n.kind == nnkImportStmt or n.kind == nnkImportExceptStmt or n.kind == nnkFromStmt:
-      imports.add(n)
+      imports.add(resolveImportStmt(n))
     else:
       requestBody.add(n)
-  if source[1].kind == nnkStmtList:
-    for n in source[1]:
+  if ast.kind == nnkStmtList:
+    for n in ast:
       filter(n)
   else:
-    filter(source[1])
+    filter(ast)
   pharaoSourceCache["imports"] = imports
   pharaoSourceCache["requestBody"] = requestBody
 
+cachePharaoSource()
+
 macro pharaoSourceImports(): untyped =
   result=pharaoSourceCache["imports"]
-  #echo "I\n", result.treeRepr
 
 macro pharaoSourceRequestBody(): untyped =
   result=pharaoSourceCache["requestBody"]
-  #echo "RB\n", result.treeRepr
 
-cachePharaoSource(includePharaoSource())
-
-#pharaoSourceImports()
+pharaoSourceImports()
 
 
 ## dynlib interface
@@ -93,7 +135,9 @@ proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
     if logErrors:
       error(e.msg)
     const outputErrors = true
-    respondProc(request, 500, headers, if outputErrors: e.msg else: "internal server error\n")
+    code = 500
+    body = if outputErrors: e.msg else: "internal server error\n"
+    respond()
 
   # autorespond if not responded yet
   if not request.responded:
@@ -101,12 +145,12 @@ proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
 
 # Initialization hook, called by pharao on loading library to
 # provide callables. Data could be provided too.
-proc pharaoInit(respondProcArg: RespondProc, logProc: LogProc, stdoutArg, stderrArg, stdinArg: File) {.exportc,dynlib.} =
+proc pharaoInit(respondProcArg: RespondProc, logProcArg: LogProc, stdoutArg, stderrArg, stdinArg: File) {.exportc,dynlib.} =
   proc NimMain() {.cdecl, importc.}
   respondProc = respondProcArg
-  log = logProc
+  log = logProcArg
   assert not respondProc.isNil, "Empty responder received"
-  assert not logProc.isNil, "Empty logger received"
+  assert not logProcArg.isNil, "Empty logger received"
 
   # these are only recommended to be used for debugging
   # but without having them assigned programs segfault

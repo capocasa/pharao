@@ -1,6 +1,3 @@
-when not defined(useMalloc):
-  {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
-
 import
   std/[os, osproc, parseopt,envvars,strutils,sharedtables,dynlib,times,strscans,locks,strtabs,streams,parsecfg],
   mummy, mummy/fileloggers,
@@ -229,6 +226,29 @@ Option takes precedence before environment value from file before environment.
   proc debug(message: string) {.hint[XDeclaredButNotUsed]: off.} =
     log(DebugLevel, message)
 
+  # C-level wrappers for cross-dynlib boundary
+  # Dynlib passes C types, host copies into its own Nim strings
+  proc respondWrapper(request: Request, code: cint,
+                      headerPairs: ptr CHeaderPair, headerCount: cint,
+                      bodyPtr: cstring, bodyLen: cint) {.nimcall,gcsafe.} =
+    var nimBody = newString(bodyLen)
+    if bodyLen > 0:
+      copyMem(addr nimBody[0], bodyPtr, bodyLen)
+    var nimHeaders: HttpHeaders
+    let pairs = cast[ptr UncheckedArray[CHeaderPair]](headerPairs)
+    for i in 0..<headerCount:
+      var name = newString(pairs[i].nameLen)
+      if pairs[i].nameLen > 0:
+        copyMem(addr name[0], pairs[i].name, pairs[i].nameLen)
+      var value = newString(pairs[i].valueLen)
+      if pairs[i].valueLen > 0:
+        copyMem(addr value[0], pairs[i].value, pairs[i].valueLen)
+      nimHeaders[name] = value
+    request.respond(code.int, nimHeaders, nimBody)
+
+  proc logWrapper(level: LogLevel, message: cstring) {.gcsafe.} =
+    log(level, $message)
+
   proc initLibrary(route: var PharaoRoute, dynlibPath: string) =
     route.libHandle = loadLib(dynlibPath)
     if route.libHandle.isNil:
@@ -240,7 +260,7 @@ Option takes precedence before environment value from file before environment.
     let initProc = cast[InitProc](route.libHandle.symAddr("pharaoInit"))
     if initProc.isNil:
       raise newException(LibraryError, "dynamic library $1 has no pharaoInit, not loading route for path $2" % [dynlibPath, route.path])
-    initProc(respond, log, stdout, stderr, stdin)
+    initProc(respondWrapper, logWrapper, stdout, stderr, stdin)
     route.libModificationTime = dynlibPath.getLastModificationTime
 
   var routes: SharedTable[string, PharaoRoute]
@@ -288,7 +308,7 @@ Option takes precedence before environment value from file before environment.
             deinitProc()
           route.libHandle.unloadLib
           route.libHandle = nil
-        let cmd = "$1 c $2 --nimcache:$3 --app:lib --d:useMalloc --d:pharao.sourcePath=$4 -o:$5 -" % [nimCmd, nimArgs, nimCachePath, sourcePath, dynlibPath]
+        let cmd = "$1 c $2 --nimcache:$3 --app:lib --d:pharao.sourcePath=$4 -o:$5 -" % [nimCmd, nimArgs, nimCachePath, sourcePath, dynlibPath]
         var env = newStringTable()
         for k, v in envPairs():
           if k notin env:

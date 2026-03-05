@@ -1,4 +1,5 @@
 import mummy, pharao/common
+import webby/httpheaders
 
 type
   ## dummy result variable to redirect it
@@ -15,7 +16,17 @@ var
   result* {.threadvar.}: Result
 
 proc respond*() =
-  respondProc(request, code, headers, body)
+  # Serialize headers to C-compatible format for cross-dynlib boundary
+  let headerSeq = seq[(string, string)](headers)
+  var pairs = newSeq[CHeaderPair](headerSeq.len)
+  for i, (name, value) in headerSeq:
+    pairs[i] = CHeaderPair(
+      name: name.cstring, nameLen: name.len.cint,
+      value: value.cstring, valueLen: value.len.cint
+    )
+  let pairsPtr = if pairs.len > 0: addr pairs[0] else: nil
+  respondProc(request, code.cint, pairsPtr, pairs.len.cint,
+              body.cstring, body.len.cint)
 
 proc add*(r: Result, s: string) =
   body.add s
@@ -36,10 +47,9 @@ template `=`*(x: varargs[string, `$`]) =
 # receive the log proc on intialization
 
 proc debug*(message: string) {.hint[XDeclaredButNotUsed]: off.} =
-  log(DebugLevel, message)
+  log(DebugLevel, message.cstring)
 proc info*(message: string) {.hint[XDeclaredButNotUsed]: off.} =
-  log(InfoLevel, message)
+  log(InfoLevel, message.cstring)
 proc error*(message: string) {.hint[XDeclaredButNotUsed]: off.} =
-  log(ErrorLevel, message)
-
+  log(ErrorLevel, message.cstring)
 

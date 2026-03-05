@@ -70,11 +70,10 @@ suite "tests for different source files":
     check(r.code == 200)
     check(r.body == "")
 
-  # SCF tests disabled - source code filters are inherently not thread-safe
-  # test "fuz":
-  #   let r = curl.get("localhost:9999/fuz.nim")
-  #   check(r.code == 200)
-  #   check("fuz.nim" in r.body)
+  test "fuz":
+    let r = curl.get("localhost:9999/fuz.nim")
+    check(r.code == 200)
+    check("fuz.nim" in r.body)
 
   test "imped":
     let r = curl.get("localhost:9999/imped.nim")
@@ -116,11 +115,13 @@ suite "tests for different source files":
     check(r.code == 200)
     check(r.body == "foo")
 
-  # SCF tests disabled - source code filters are inherently not thread-safe
-  # test "scf":
-  #   let r = curl.get("localhost:9999/scf.nim")
-  #   check(r.code == 200)
-  #   check(r.body[^5..^2] =~ peg"\d\d\d\d")
+  test "scf":
+    let r = curl.get("localhost:9999/scf.nim")
+    check(r.code == 200)
+    # Random number 0-10000, check last chars before newline are digits
+    check(r.body.strip().len > 0)
+    let lastLine = r.body.strip().splitLines()[^1]
+    check(lastLine.len > 0 and lastLine[^1] in '0'..'9')
 
   test "sqlite":
     let r = curl.get("localhost:9999/sqlite.nim")

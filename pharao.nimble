@@ -9,6 +9,7 @@ binDir = "bin"
 
 requires "nim >= 2.0.0"
 requires "mummy >= 0.4.6"
+requires "scf >= 0.1.0"
 
 when not defined(release):
   requires "curly"

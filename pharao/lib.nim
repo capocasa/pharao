@@ -11,7 +11,8 @@ import
   ./common,
   mummy,
   mummy/multipart,
-  webby/urls
+  webby/urls,
+  scf
 
 import macros except body, error
 
@@ -37,10 +38,14 @@ const pharaoSourceDir = pharaoSourcePath.parentDir
 
 # Parse as untyped AST so variables are resolved in function scope,
 # not module scope. This prevents user vars from becoming shared globals.
-# NOTE: Source code filters (#? stdtmpl) are not supported - they can't
-# be parsed by parseStmt and are inherently not thread-safe.
+# Source code filters (#? stdtmpl) are transformed via scf package first.
 macro cachePharaoSource() =
-  let sourceCode = staticRead(pharaoSourcePath)
+  let rawSource = staticRead(pharaoSourcePath)
+  # Transform SCF syntax to valid Nim if needed
+  let sourceCode = if rawSource.startsWith("#?"):
+                     filterStdTmplAuto(rawSource)
+                   else:
+                     rawSource
   let ast = parseStmt(sourceCode)
   var
     imports = newStmtList()

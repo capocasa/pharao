@@ -16,4 +16,5 @@ type
   LogProc* = proc(level: LogLevel, message: cstring) {.closure, gcsafe}
   InitProc* = proc(respondProc: RespondProc, logProc: LogProc, stdoutArg, stderrArg, stdinArg: File) {.nimcall,gcsafe.}
   DeinitProc* = proc() {.nimcall,gcsafe.}
+  VersionProc* = proc(): cstring {.nimcall,gcsafe.}
 

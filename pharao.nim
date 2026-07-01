@@ -3,11 +3,14 @@ import
   mummy, mummy/fileloggers,
   pharao/common
 
+const NimblePkgVersion {.strdefine.} = "0.0.0"
+
 type
   PharaoRouteObj = object
     path: string
     libHandle: LibHandle
     libModificationTime: Time
+    libVersion: string
     requestProc: RequestProc
     lock: Lock
     refCount: int
@@ -23,6 +26,10 @@ proc initPharaoServer() =
     stderr.write "Invalid option or argument, run with option --help for more information\n"
     quit(1)
 
+  proc version() =
+    echo "pharao " & NimblePkgVersion
+    quit(0)
+
   proc help() =
     echo """
 Usage: pharao [options]
@@ -30,6 +37,7 @@ Usage: pharao [options]
 Starts a web server that will compile and execute Nim files in a web
 root directory and serve the result.
 
+-v, --version           Show version
 -h, --help              Show this help
 -p, --port:PORT         Set port
 -H, --host:HOST         Set host
@@ -75,6 +83,8 @@ Option takes precedence before environment value from file before environment.
       break
     of cmdShortOption:
       case key:
+      of "v":
+        version()
       of "h":
         if val != "":
           usage()
@@ -99,6 +109,8 @@ Option takes precedence before environment value from file before environment.
         usage()
     of cmdLongOption:
       case key:
+      of "version":
+        version()
       of "help":
         if val != "":
           usage()
@@ -255,6 +267,12 @@ Option takes precedence before environment value from file before environment.
     route.libHandle = loadLib(dynlibPath)
     if route.libHandle.isNil:
       raise newException(LibraryError, "dynamic library $1 could not be loaded for path" % [dynlibPath, route.path])
+
+    # Check version before full initialization (safe to call before NimMain,
+    # returns a pointer to static string data in the .so)
+    let versionProc = cast[VersionProc](route.libHandle.symAddr("pharaoGetVersion"))
+    route.libVersion = if not versionProc.isNil: $versionProc() else: ""
+
     route.requestProc = cast[RequestProc](route.libHandle.symAddr("pharaoRequest"))
     if route.requestProc.isNil:
       raise newException(LibraryError, "dynamic library $1 has no pharaoRequest, not loading route for path $2" % [dynlibPath, route.path])
@@ -282,6 +300,13 @@ Option takes precedence before environment value from file before environment.
         route.initLibrary(dynlibPath)
       except LibraryError as e:
         error(e.msg)
+        continue
+      if route.libVersion != NimblePkgVersion:
+        info("Removing stale library $1 (version $2, expected $3)" % [dynlibPath, route.libVersion, NimblePkgVersion])
+        route.libHandle.unloadLib
+        route.libHandle = nil
+        removeFile(dynlibPath)
+        continue
       routes[path] = route
 
   proc handler(request: Request) =
@@ -294,7 +319,8 @@ Option takes precedence before environment value from file before environment.
       route.lock.acquire
       
       # wait for in-flight requests before recompiling
-      if route.libModificationTime < sourcePath.getLastModificationTime:
+      let versionStale = not route.libHandle.isNil and route.libVersion != NimblePkgVersion
+      if route.libModificationTime < sourcePath.getLastModificationTime or versionStale:
         while route.refCount > 0:
           route.cond.wait(route.lock)
         
@@ -310,7 +336,7 @@ Option takes precedence before environment value from file before environment.
             deinitProc()
           route.libHandle.unloadLib
           route.libHandle = nil
-        let cmd = "$1 c $2 --nimcache:$3 --app:lib --d:pharao.sourcePath=$4 -o:$5 -" % [nimCmd, nimArgs, nimCachePath, sourcePath, dynlibPath]
+        let cmd = "$1 c $2 --nimcache:$3 --app:lib --d:pharao.sourcePath=$4 --d:pharaoVersion=$5 -o:$6 -" % [nimCmd, nimArgs, nimCachePath, sourcePath, NimblePkgVersion, dynlibPath]
         var env = newStringTable()
         for k, v in envPairs():
           if k notin env:

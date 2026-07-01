@@ -16,8 +16,13 @@ import
 
 import macros except body, error
 
-## basic compile assertions
+## version, passed from pharao server at compile time
+const pharaoVersion* {.strdefine: "pharaoVersion".} = "0.0.0"
 
+proc pharaoGetVersion*(): cstring {.exportc, dynlib.} =
+  pharaoVersion
+
+## basic compile assertions
 
 when appType != "lib":
   {.error: "Pharaoh dynamic library must be compiled with params '--app:lib'"}

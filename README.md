@@ -339,7 +339,7 @@ echo "sensitive user data"
 
 if request.headers.getOrDefault("Authorization", "") != "Bearer my-secure-token":
   code = 401
-  body = unauthorized
+  body = "unauthorized"
   return
 
 import badidea

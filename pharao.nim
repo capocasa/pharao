@@ -53,6 +53,7 @@ PHARAO_LOG_FILE              -                            Log file path or - for
 PHARAO_LOG_LEVEL             DEBUG                        Minimum level to log, DEBUG INFO or ERROR
 PHARAO_LOG_DATETIME_PATTERN  yyyy-MM-dd'T'HH:mm:sszzz     Nim datetime format pattern for log
 PHARAO_LOG_PATTERN           [$1 $2] $3                   Log format with $1 date, $2 level, $3 message
+PHARAO_MAX_BODY_LEN          134217728                    Maximum request body size in bytes (128 MB)
 
 Option takes precedence before environment value from file before environment.
 
@@ -167,6 +168,7 @@ Option takes precedence before environment value from file before environment.
   let nimArgs = byEnv("PHARAO_NIM_ARGS", "")
   let nimCachePath = byEnv("PHARAO_NIM_CACHE", "cache")
   let outputErrors = byEnv("PHARAO_OUTPUT_ERRORS", "true").parseBool
+  let maxBodyLen = byEnv("PHARAO_MAX_BODY_LEN", "134217728").parseInt
   let logFile = byEnv("PHARAO_LOG_FILE", "-")
   let (logInfo, logDebug) = case byEnv("PHARAO_LOG_LEVEL", "DEBUG"):
     of "DEBUG":
@@ -351,8 +353,8 @@ Option takes precedence before environment value from file before environment.
       request.respond(404, defaultHeaders, "not found\n")
     info($request)
 
-  let server = newServer(handler)
-  info("Pharao $1 wrapped to $2:$3" % [wwwRoot, host, $port.int])
+  let server = newServer(handler, maxBodyLen = maxBodyLen)
+  info("Pharao $1 $2 wrapped to $3:$4" % [NimblePkgVersion, wwwRoot, host, $port.int])
   server.serve(port, host)
 
 when isMainModule and appType == "console":

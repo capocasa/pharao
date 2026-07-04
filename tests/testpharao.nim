@@ -154,6 +154,17 @@ suite "tests for different source files":
     check(r2.code == 200)
     check(r2.body == "hello world\n")
 
+  test "route is not re-allocated per request (no leak/hang under load)":
+    # Regression: mgetOrPut(path, newPharaoRoute(path)) used to evaluate
+    # newPharaoRoute on every call, leaking a createShared chunk + Lock +
+    # Cond per request. Over time this exhausted memory and the process
+    # crashed with SIGSEGV (nil deref from alloc failure). Many requests
+    # to the same route must stay fast and responsive.
+    for i in 1..50:
+      let r = curl.get("localhost:9999/foo.nim")
+      check(r.code == 200)
+      check(r.body == "foo")
+
   test "yowzy":
     let r = curl.get("localhost:9999/yowzy.nim")
     check(r.code == 409)

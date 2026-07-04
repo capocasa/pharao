@@ -314,7 +314,18 @@ Option takes precedence before environment value from file before environment.
     let defaultHeaders = @{"Content-Type": "text/plain"}.HttpHeaders
     if fileExists(sourcePath):
 
-      var route = routes.mgetOrPut(request.path, newPharaoRoute(request.path))
+      # Avoid mgetOrPut here: it evaluates newPharaoRoute eagerly on
+      # every call, leaking a createShared chunk, a Lock and a Cond each
+      # time the key already exists. Look up first; only allocate+insert
+      # when the route is genuinely missing. A first-touch race may have two
+      # threads both insert; the loser's route leaks, but this happens at
+      # most once per path (vs every request before), so it is negligible.
+      var route: PharaoRoute = nil
+      routes.withValue(request.path, existing):
+        route = existing[]
+      if route.isNil:
+        route = newPharaoRoute(request.path)
+        routes[request.path] = route
 
       route.lock.acquire
       

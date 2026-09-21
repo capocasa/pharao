@@ -32,6 +32,10 @@ const pharaoSourcePath {.strdefine: "pharao.sourcePath".} = ""
 when pharaoSourcePath == "":
   {.error: "Pharaoh dynamic library requires a --d:sourcePath, usually the pharoh server will take care of that for you".}
 
+## web root, passed from server so import and include paths resolve the
+## way nim resolves them with the web root on its search path
+const pharaoWwwRoot {.strdefine: "pharaoWwwRoot".} = ""
+
 # sets up GC and run main module on library init
 
 ## library specific state
@@ -44,6 +48,11 @@ const pharaoSourceDir = pharaoSourcePath.parentDir
 # Parse as untyped AST so variables are resolved in function scope,
 # not module scope. This prevents user vars from becoming shared globals.
 # Source code filters (#? stdtmpl) are transformed via scf package first.
+# Include statements that resolve to a local file are spliced in
+# recursively, so includes work relative to the source file and SCF
+# files get filtered. Every file read this way, and every local module
+# reachable through local imports, is recorded as a dependency for the
+# server's reload check.
 macro cachePharaoSource() =
   let rawSource = staticRead(pharaoSourcePath)
   # Transform SCF syntax to valid Nim if needed
@@ -55,60 +64,104 @@ macro cachePharaoSource() =
   var
     imports = newStmtList()
     requestBody = newStmtList()
+    deps = @[pharaoSourcePath]
 
-  # Resolve relative import paths to absolute paths based on source directory
-  # Only resolve if the local file actually exists; otherwise leave as-is
-  # (for nimble packages, stdlib, etc.)
-  proc resolveImportPath(n: NimNode): NimNode =
-    if n.kind == nnkIdent:
-      # Bare identifier like `import foo`
-      let localPath = pharaoSourceDir / n.strVal & ".nim"
-      if fileExists(localPath):
-        # Local file exists - resolve to absolute path (without .nim extension)
-        result = newStrLitNode(pharaoSourceDir / n.strVal)
-      else:
-        # Not a local file - leave as-is (nimble package or stdlib)
-        result = n
-    elif n.kind == nnkInfix and n[0].kind == nnkIdent and n[0].strVal == "/":
-      # Path like `foo/bar` or `std/random` - resolve first component if local
-      let first = n[1]
-      if first.kind == nnkIdent and first.strVal != "std":
-        let localPath = pharaoSourceDir / first.strVal & ".nim"
-        if fileExists(localPath):
-          var newN = n.copyNimTree()
-          newN[1] = newStrLitNode(pharaoSourceDir / first.strVal)
-          result = newN
-        else:
-          result = n
-      else:
-        result = n
-    elif n.kind == nnkPrefix and n[0].kind == nnkIdent and n[0].strVal == "./":
-      # Explicit relative like `import ./foo` - always resolve
-      result = n.copyNimTree()
-      if n[1].kind == nnkIdent:
-        result[1] = newStrLitNode(pharaoSourceDir / n[1].strVal)
+  # reconstruct the path text of an import or include argument
+  proc pathOf(n: NimNode): string =
+    case n.kind
+    of nnkIdent, nnkStrLit, nnkRStrLit, nnkTripleStrLit:
+      n.strVal
+    of nnkInfix:
+      if n.len == 3: pathOf(n[1]) & "/" & pathOf(n[2]) else: ""
+    of nnkPrefix:
+      if n.len == 2: pathOf(n[0]) & pathOf(n[1]) else: ""
     else:
-      result = n
+      ""
 
-  proc resolveImportStmt(n: NimNode): NimNode =
-    result = n.copyNimTree()
-    # Import children start at index 0 for nnkImportStmt
-    for i in 0..<result.len:
-      if result[i].kind in {nnkIdent, nnkInfix, nnkPrefix}:
-        result[i] = resolveImportPath(result[i])
-
-  template filter(n: NimNode) =
-    if n.kind == nnkImportStmt or n.kind == nnkImportExceptStmt or n.kind == nnkFromStmt:
-      imports.add(resolveImportStmt(n))
+  # Resolve an import or include argument to a local file the way nim
+  # does with the web root on its search path: relative to the
+  # importing file first, then the web root. std/ paths never resolve
+  # locally, nim treats them as standard library only
+  proc findLocal(baseDir: string, n: NimNode): string =
+    result = ""
+    let p = pathOf(n)
+    if p == "" or p == "std" or p.startsWith("std/"):
+      return
+    let withExt = if p.endsWith(".nim"): p else: p & ".nim"
+    if withExt.isAbsolute:
+      if fileExists(withExt):
+        result = withExt
     else:
-      requestBody.add(n)
-  if ast.kind == nnkStmtList:
-    for n in ast:
-      filter(n)
-  else:
-    filter(ast)
+      for base in [baseDir, pharaoWwwRoot]:
+        if base != "" and fileExists(base / withExt):
+          result = base / withExt
+          return
+
+  proc readStatements(path: string): NimNode =
+    let raw = staticRead(path)
+    let code = if raw.startsWith("#?"): filterStdTmplAuto(raw) else: raw
+    parseStmt(code)
+
+  # record a local module as dependency and follow its own local
+  # imports and includes. no rewriting here, nim compiles this module
+  # on its own. unparseable modules are only recorded, nim reports the
+  # error when it compiles them
+  proc walkDeps(deps: var seq[string], path: string) =
+    if path in deps:
+      return
+    deps.add path
+    let moduleAst = try: readStatements(path) except CatchableError: nil
+    if moduleAst.isNil:
+      return
+    for n in moduleAst:
+      if n.kind in {nnkImportStmt, nnkIncludeStmt}:
+        for i in 0..<n.len:
+          let f = findLocal(path.parentDir, n[i])
+          if f != "":
+            walkDeps(deps, f)
+      elif n.kind in {nnkFromStmt, nnkImportExceptStmt}:
+        # only the first child is a module path, the rest are symbols
+        let f = findLocal(path.parentDir, n[0])
+        if f != "":
+          walkDeps(deps, f)
+
+  proc processStmts(imports, requestBody: var NimNode, deps: var seq[string],
+                    stmts: NimNode, baseDir: string) =
+    for n in stmts:
+      if n.kind in {nnkImportStmt, nnkImportExceptStmt, nnkFromStmt}:
+        var r = n.copyNimTree()
+        # all children of an import statement are module paths, from
+        # and import except statements carry the module in the first
+        let indices = if n.kind == nnkImportStmt: 0..<r.len else: 0..0
+        for i in indices:
+          if r[i].kind in {nnkIdent, nnkStrLit, nnkInfix, nnkPrefix}:
+            let f = findLocal(baseDir, r[i])
+            if f != "":
+              walkDeps(deps, f)
+              # resolve local module to absolute path so nim finds it
+              r[i] = newStrLitNode(f.changeFileExt(""))
+        imports.add r
+      elif n.kind == nnkIncludeStmt:
+        # splice local includes in, non local ones are left for nim to
+        # resolve through its search path
+        var keep = newNimNode(nnkIncludeStmt)
+        for i in 0..<n.len:
+          let f = findLocal(baseDir, n[i])
+          if f == "":
+            keep.add n[i]
+          elif f notin deps:
+            deps.add f
+            processStmts(imports, requestBody, deps, readStatements(f),
+                         f.parentDir)
+        if keep.len > 0:
+          requestBody.add keep
+      else:
+        requestBody.add n
+
+  processStmts(imports, requestBody, deps, ast, pharaoSourceDir)
   pharaoSourceCache["imports"] = imports
   pharaoSourceCache["requestBody"] = requestBody
+  pharaoSourceCache["deps"] = newLit(deps.join("\n"))
 
 cachePharaoSource()
 
@@ -118,7 +171,15 @@ macro pharaoSourceImports(): untyped =
 macro pharaoSourceRequestBody(): untyped =
   result=pharaoSourceCache["requestBody"]
 
+macro pharaoSourceDeps(): untyped =
+  result=pharaoSourceCache["deps"]
+
 pharaoSourceImports()
+
+## dependency files of this library, newline separated absolute paths,
+## the server checks them to decide when to recompile
+proc pharaoGetDeps*(): cstring {.exportc, dynlib.} =
+  pharaoSourceDeps()
 
 
 ## dynlib interface

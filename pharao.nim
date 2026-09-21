@@ -11,6 +11,7 @@ type
     libHandle: LibHandle
     libModificationTime: Time
     libVersion: string
+    deps: seq[string]
     requestProc: RequestProc
     lock: Lock
     refCount: int
@@ -273,6 +274,12 @@ Option takes precedence before environment value from file before environment.
     let versionProc = cast[VersionProc](route.libHandle.symAddr("pharaoGetVersion"))
     route.libVersion = if not versionProc.isNil: $versionProc() else: ""
 
+    # Dependency files (includes, local imports) the server checks to
+    # decide when to recompile. Older libraries without the symbol
+    # only track the main source file
+    let depsProc = cast[DepsProc](route.libHandle.symAddr("pharaoGetDeps"))
+    route.deps = if not depsProc.isNil: ($depsProc()).splitLines else: @[]
+
     route.requestProc = cast[RequestProc](route.libHandle.symAddr("pharaoRequest"))
     if route.requestProc.isNil:
       raise newException(LibraryError, "dynamic library $1 has no pharaoRequest, not loading route for path $2" % [dynlibPath, route.path])
@@ -331,13 +338,32 @@ Option takes precedence before environment value from file before environment.
       
       # wait for in-flight requests before recompiling
       let versionStale = not route.libHandle.isNil and route.libVersion != NimblePkgVersion
-      if route.libModificationTime < sourcePath.getLastModificationTime or versionStale:
+      var sourceChanged = route.libModificationTime < sourcePath.getLastModificationTime
+      # includes and local imports
+      for dep in route.deps:
+        if dep != "" and (not fileExists(dep) or
+            route.libModificationTime < dep.getLastModificationTime):
+          sourceChanged = true
+          break
+      if sourceChanged or versionStale:
         while route.refCount > 0:
           route.cond.wait(route.lock)
         
         let dynlibPath = dynlibRoot / request.path.parentDir / DynlibFormat % request.path.lastPathPart
         createDir(dynlibPath.parentDir)
 
+        # route sources resolve to absolute paths in pharao/lib before
+        # nim sees them, the web root is deliberately NOT on the search
+        # path, its files would shadow nimble packages like scf
+        let nimPaths = block:
+          var p = ""
+          let pharaoDir = getAppFilename().parentDir.parentDir
+          if fileExists(pharaoDir / "pharao" / "lib.nim"):
+            # checkout or worktree build, compile routes against the
+            # sources of the running binary instead of a nimble package,
+            # which can be stale or missing during development
+            p = " --path:" & pharaoDir
+          p
         # unload previous program
         if not route.libHandle.isNil:
           let deinitProc = cast[DeinitProc](route.libHandle.symAddr("pharaoDeinit"))
@@ -347,7 +373,7 @@ Option takes precedence before environment value from file before environment.
             deinitProc()
           route.libHandle.unloadLib
           route.libHandle = nil
-        let cmd = "$1 c $2 --nimcache:$3 --app:lib --d:pharao.sourcePath=$4 --d:pharaoVersion=$5 -o:$6 -" % [nimCmd, nimArgs, nimCachePath, sourcePath, NimblePkgVersion, dynlibPath]
+        let cmd = "$1 c $2 --nimcache:$3$4 --app:lib --d:pharao.sourcePath=$5 --d:pharaoVersion=$6 --d:pharaoWwwRoot=$7 -o:$8 -" % [nimCmd, nimArgs, nimCachePath, nimPaths, sourcePath, NimblePkgVersion, wwwRoot, dynlibPath]
         var env = newStringTable()
         for k, v in envPairs():
           if k notin env:

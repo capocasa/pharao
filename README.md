@@ -261,6 +261,33 @@ this
 that
 ```
 
+Included files can be source code filter files, pharao filters them before compiling.
+
+```nim
+# /var/www/handler.nim
+
+include templates
+echo templates("hot reload")
+```
+
+```nim
+# /var/www/templates.nim
+
+#? stdtmpl
+#proc templates(x: string): string =
+<b>$x</b>
+```
+
+```sh
+$ curl localhost:2347/handler.nim
+<b>hot reload</b>
+```
+
+When you edit an included file, or a file that is imported locally, the
+route recompiles on the next request. Files that come from nimble packages
+are not tracked, restart pharao after installing packages and touch a
+route to pick them up.
+
 Imports work too.
 
 If you want to use pharao's variables in imported files, add `import pharao/tools`.
@@ -801,7 +828,7 @@ Inner workings
 
 Pharao contains a mummy webserver and a single request handler for everything.
 
-When a request comes in, the web root is checked for a file with the relative path of the request. If the file exists, it is wrapped in a special boilerplate file in `pharao/lib`, and the interface `pharao/tools` is imported before compiling it into a request handler in a dynamic library that is called to process the request. On subsequent requests, a recompile is only done if the source file is newer than the library file. Existing compiled requests get loaded on boot so there is no unnecessary compiling.
+When a request comes in, the web root is checked for a file with the relative path of the request. If the file exists, it is wrapped in a special boilerplate file in `pharao/lib`, and the interface `pharao/tools` is imported before compiling it into a request handler in a dynamic library that is called to process the request. Includes are resolved and spliced in by pharao, so they work relative to the source file and source code filter files get filtered. On subsequent requests, a recompile is done if the source file or any of its local includes or imports is newer than the library file. The library carries its dependency list, so existing compiled requests get loaded on boot with their dependencies intact and there is no unnecessary compiling.
 
 Limitations
 -----------

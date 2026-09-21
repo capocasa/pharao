@@ -14,4 +14,5 @@ requires "scf >= 0.1.0"
 when not defined(release):
   requires "curly"
   requires "db_connector"
+  requires "nimja"
 

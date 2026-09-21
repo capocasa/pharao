@@ -24,7 +24,7 @@ suite "tests for different source files":
     "PHARAO_NIM_COMMAND": getCurrentCompilerExe(),
     "PHARAO_WWW_ROOT": wwwRoot,
     "PHARAO_DYNLIB_PATH": dynlibPath,
-    "PHARAO_NIM_CACHE_PATH": cachePath
+    "PHARAO_NIM_CACHE": cachePath
   }.newStringTable
 
   for k, v in envPairs():
@@ -169,4 +169,69 @@ suite "tests for different source files":
     let r = curl.get("localhost:9999/yowzy.nim")
     check(r.code == 409)
     check(r.body == "Yowzy")
+
+  test "include":
+    let r = curl.get("localhost:9999/inc.nim")
+    check(r.code == 200)
+    check(r.body == "inc\nincpart\n")
+
+  test "scf include":
+    let r = curl.get("localhost:9999/scfinc.nim")
+    check(r.code == 200)
+    check(r.body == "<b>hot</b>\n\n\n")
+
+  test "import dependency chain":
+    let r = curl.get("localhost:9999/impdep.nim")
+    check(r.code == 200)
+    check(r.body == "v1\n")
+
+  test "include hot reload":
+    let r1 = curl.get("localhost:9999/inc.nim")
+    check(r1.code == 200)
+    check(r1.body == "inc\nincpart\n")
+    writeFile(wwwRoot / "incpart.nim", "echo \"incpart reloaded\"\n")
+    defer: writeFile(wwwRoot / "incpart.nim", "echo \"incpart\"\n")
+    let r2 = curl.get("localhost:9999/inc.nim")
+    check(r2.code == 200)
+    check(r2.body == "inc\nincpart reloaded\n")
+
+  test "scf include hot reload":
+    let r1 = curl.get("localhost:9999/scfinc.nim")
+    check(r1.code == 200)
+    check(r1.body == "<b>hot</b>\n\n\n")
+    writeFile(wwwRoot / "scfincpart.nim",
+      "#? stdtmpl\n#proc scfincpart(x: string): string =\n<i>$x</i>\n")
+    defer: writeFile(wwwRoot / "scfincpart.nim",
+      "#? stdtmpl\n#proc scfincpart(x: string): string =\n<b>$x</b>\n")
+    let r2 = curl.get("localhost:9999/scfinc.nim")
+    check(r2.code == 200)
+    check(r2.body == "<i>hot</i>\n\n\n")
+
+  test "local import hot reload":
+    let r1 = curl.get("localhost:9999/impdep.nim")
+    check(r1.code == 200)
+    check(r1.body == "v1\n")
+    writeFile(wwwRoot / "impdepbase.nim", "const impdepVal* = 2\n")
+    defer: writeFile(wwwRoot / "impdepbase.nim", "const impdepVal* = 1\n")
+    let r2 = curl.get("localhost:9999/impdep.nim")
+    check(r2.code == 200)
+    check(r2.body == "v2\n")
+
+  test "hot reload from a new connection does not crash the server":
+    check(curl.get("localhost:9999/inc.nim").code == 200)
+    writeFile(wwwRoot / "incpart.nim", "echo \"incpart fresh\"\n")
+    defer: writeFile(wwwRoot / "incpart.nim", "echo \"incpart\"\n")
+    let fresh = newCurly()
+    let r = fresh.get("localhost:9999/inc.nim")
+    check(r.code == 200)
+    check(r.body == "inc\nincpart fresh\n")
+
+  test "route revisits over new connections do not crash the server":
+    # Regression: a route served from two different web server worker
+    # threads crashed pharao with SIGSEGV in the library allocator. The
+    # test suite normally keeps one connection, so every request here
+    # goes through a fresh one
+    for i in 1..3:
+      check(newCurly().get("localhost:9999/inc.nim").code == 200)
+      check(newCurly().get("localhost:9999/impdep.nim").code == 200)
 

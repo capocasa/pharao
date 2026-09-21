@@ -17,4 +17,5 @@ type
   InitProc* = proc(respondProc: RespondProc, logProc: LogProc, stdoutArg, stderrArg, stdinArg: File) {.nimcall,gcsafe.}
   DeinitProc* = proc() {.nimcall,gcsafe.}
   VersionProc* = proc(): cstring {.nimcall,gcsafe.}
+  DepsProc* = proc(): cstring {.nimcall,gcsafe.}
 

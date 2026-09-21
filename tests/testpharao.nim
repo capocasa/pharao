@@ -234,4 +234,28 @@ suite "tests for different source files":
     for i in 1..3:
       check(newCurly().get("localhost:9999/inc.nim").code == 200)
       check(newCurly().get("localhost:9999/impdep.nim").code == 200)
+  test "404 uses error.nim":
+    let r = curl.get("localhost:9999/missing.nim")
+    check(r.code == 404)
+    check(r.body == "errorpage[404]")
+
+  test "404 cascades to nearest error.nim":
+    let r = curl.get("localhost:9999/nested/missing.nim")
+    check(r.code == 404)
+    check(r.body.startsWith("nested 404 prefix 404 Not Found"))
+
+  test "error.nim is a normal page when requested directly":
+    let r = curl.get("localhost:9999/error.nim")
+    check(r.code == 200)
+    check(r.body == "errorpage[200]")
+
+  test "compile failure uses error.nim":
+    let r = curl.get("localhost:9999/broken.nim")
+    check(r.code == 500)
+    check(r.body == "errorpage[500]")
+
+  test "runtime exception uses error.nim":
+    let r = curl.get("localhost:9999/exploder.nim")
+    check(r.code == 500)
+    check(r.body == "errorpage[500]")
 

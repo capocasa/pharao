@@ -184,19 +184,37 @@ proc pharaoGetDeps*(): cstring {.exportc, dynlib.} =
 
 ## dynlib interface
 
+# status page presets, armed by the server right before a request runs
+# so an error.nim can render code and detail without extra ceremony
+var
+  presetArmed {.threadvar.}: bool
+  presetCode {.threadvar.}: int
+  presetBody {.threadvar.}: string
+
+proc pharaoPreset*(codeArg: cint, bodyArg: cstring, bodyArgLen: cint) {.exportc,dynlib.} =
+  presetArmed = true
+  presetCode = codeArg.int
+  presetBody = newString(bodyArgLen)
+  if bodyArgLen > 0:
+    copyMem(addr presetBody[0], bodyArg, bodyArgLen)
+
 # main request proc
 proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
 
   # requests run on web server worker threads the library never created,
   # each one needs its thread-local allocator set up before allocating
+  # (no-op under useMalloc, kept so non-useMalloc compiles stay safe)
   when declared(setupForeignThreadGc):
     setupForeignThreadGc()
 
-  # init request vars
+  # init request vars, error page requests start with code and body preset
   request = requestArg
-  code = 200
+  code = if presetArmed: presetCode else: 200
   headers = @{"Content-Type":"text/html; charset=utf-8"}.HttpHeaders
-  body = ""
+  body = if presetArmed: presetBody else: ""
+  presetArmed = false
+  presetBody = ""
+  presetCode = 0
 
   # interface func to respond
   # manually to continue execution
@@ -207,13 +225,14 @@ proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
     pharaoSourceRequestBody()
   except:
     let e = getCurrentException()
-    const logErrors = true
-    if logErrors:
-      error(e.msg)
-    const outputErrors = true
-    code = 500
-    body = if outputErrors: e.msg else: "internal server error\n"
-    respond()
+    error(e.msg)
+    if not errorProc.isNil:
+      # the server handles the response, usually with an error.nim page
+      errorProc(request, 500.cint, e.msg.cstring, e.msg.len.cint)
+    else:
+      code = 500
+      body = e.msg
+      respond()
 
   # autorespond if not responded yet
   if not request.responded:
@@ -221,12 +240,13 @@ proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
 
 # Initialization hook, called by pharao on loading library to
 # provide callables. Data could be provided too.
-proc pharaoInit(respondProcArg: RespondProc, logProcArg: LogProc, stdoutArg, stderrArg, stdinArg: File) {.exportc,dynlib.} =
+proc pharaoInit(respondProcArg: RespondProc, logProcArg: LogProc, errorProcArg: ErrorProc, stdoutArg, stderrArg, stdinArg: File) {.exportc,dynlib.} =
   proc NimMain() {.cdecl, importc.}
   when declared(setupForeignThreadGc):
     setupForeignThreadGc()
   respondProc = respondProcArg
   log = logProcArg
+  errorProc = errorProcArg
   assert not respondProc.isNil, "Empty responder received"
   assert not logProcArg.isNil, "Empty logger received"
 

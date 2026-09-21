@@ -8,6 +8,7 @@ type
 ## Include and preprocess user supplied code (macros prefixed with pharao)
 var
   respondProc*: RespondProc  # call web server responder
+  errorProc*: ErrorProc  # report a failed request to the server
   log*: LogProc  # write to log
   code* {.threadvar.}: int
   headers* {.threadvar.}: HttpHeaders

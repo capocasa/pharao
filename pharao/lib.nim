@@ -126,6 +126,11 @@ pharaoSourceImports()
 # main request proc
 proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
 
+  # requests run on web server worker threads the library never created,
+  # each one needs its thread-local allocator set up before allocating
+  when declared(setupForeignThreadGc):
+    setupForeignThreadGc()
+
   # init request vars
   request = requestArg
   code = 200
@@ -157,6 +162,8 @@ proc pharaoRequest*(requestArg: Request) {.exportc,dynlib.} =
 # provide callables. Data could be provided too.
 proc pharaoInit(respondProcArg: RespondProc, logProcArg: LogProc, stdoutArg, stderrArg, stdinArg: File) {.exportc,dynlib.} =
   proc NimMain() {.cdecl, importc.}
+  when declared(setupForeignThreadGc):
+    setupForeignThreadGc()
   respondProc = respondProcArg
   log = logProcArg
   assert not respondProc.isNil, "Empty responder received"
@@ -172,5 +179,7 @@ proc pharaoInit(respondProcArg: RespondProc, logProcArg: LogProc, stdoutArg, std
   debug("initialized " & querySetting(SingleValueSetting.nimcacheDir))
 
 proc pharaoDeinit() {.exportc,dynlib.} =
+  when declared(setupForeignThreadGc):
+    setupForeignThreadGc()
   GC_FullCollect()
 

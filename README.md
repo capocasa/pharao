@@ -236,6 +236,64 @@ done
 
 ```
 
+Error pages
+-----------
+
+When a request has no matching .nim file (404), when a route fails to
+compile or load (500), when it raises an exception (500) or produces no
+response (503), pharao serves an error page. Put an `error.nim` in your
+web root and it takes over all of those:
+
+```nim
+# /var/www/error.nim
+
+body = """
+<h1> $1 </h1>
+<p>That's a $2.</p>
+""" % [$code, if code == 404: "shame about the link" else: "our fault"]
+```
+
+The page is a normal pharao program with two things prefilled: `code` is
+the status pharao was about to send, and `body` already contains the
+default status page text including error details where applicable. An
+empty `error.nim` behaves exactly like the builtin page. Overriding
+`code` works too, so `error.nim` doubles as a front controller: match on
+`request.path` and serve real content with a 200 if you want custom
+routing.
+
+```nim
+# /var/www/error.nim, minimal but styled
+body = "<style>body{font-family:sans-serif}</style>" & body
+```
+
+Error pages cascade. A request for `/blog/2026/missing` uses
+`/blog/2026/error.nim`, then `/blog/error.nim`, then `/error.nim`, then
+the builtin page. So one page for the site, another one for a sub-app.
+
+Requested directly, `/error.nim` is just another page with no preset,
+handy for previewing.
+
+The filename is configurable:
+
+```
+PHARAO_ERROR_PAGE=error.nim     # the default, cascades up to the web root
+PHARAO_ERROR_PAGE=pharaoerror.nim   # a different name, still cascades
+PHARAO_ERROR_PAGE=/errors/handler.nim   # anchored at the web root, no cascade
+```
+
+If the error page itself fails to compile or raises, pharao falls back
+to the builtin page, a plain text status page in the grand tradition of
+web servers:
+
+```
+$ curl localhost:2347/nope
+404 Not Found
+
+The requested path does not match any route in this web root.
+
+pharao/0.3.0
+```
+
 More than one file
 ------------------
 
@@ -525,6 +583,8 @@ PHARAO_LOG_FILE              -                            Log file path or - for
 PHARAO_LOG_LEVEL             DEBUG                        Minimum level to log, DEBUG INFO or ERROR
 PHARAO_LOG_DATETIME_PATTERN  yyyy-MM-dd'T'HH:mm:sszzz     Nim datetime format pattern for log
 PHARAO_LOG_PATTERN           [$1 $2] $3                   Log format with $1 date, $2 level, $3 message
+PHARAO_MAX_BODY_LEN          134217728                    Maximum request body size in bytes (128 MB)
+PHARAO_ERROR_PAGE            error.nim                    Error page, a filename cascades up to the web root, a path starting with / is fixed
 
 Option takes precedence before environment value from file before environment.
 
@@ -809,6 +869,7 @@ Limitations
 - Even though mummy is strong on websockets, pharao doesn't support them yet. It would be cool though! It would take a really cool simplistic API to be worth it though. Can you think of one?
 - Pharao has no mechanism for handling static files and is unaware of the concept of file extensions. The assumption is that your proxy server will handle that. A quick workaround is to use a one-liner source code filter for e.g. a CSS file. This would be rather interesting to build but would require a mummy patch to support download streaming, in the author's humble opinion.
 - Pharao does not cover all CGI features yet, for example, there is no mechanism to have /foo.nim/bar/fuz call foo.nim with /bar/fuz in the request path. Also, pharao is usually pointed at the web root /var/www, so if you have a file in a virtual host /var/www/example.org/foo.nim, then /example.org will be part of the path /example.org/foo.nim, as far as pharao is concerned. CGI resolves this by shortening the path to /foo.nim. This is quite donable with pharao too, it just hasn't been done yet.
+- Malformed requests and oversized bodies are dropped by the mummy web server before pharao's handler runs, the client gets a connection reset instead of a status page, so error.nim never sees those. A mummy patch would be needed to respond first. In practice a fronting proxy answers these with its own error pages.
 
 Thanks
 ------

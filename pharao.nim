@@ -1,3 +1,6 @@
+when not defined(useMalloc):
+  {.error: "pharao must be compiled with useMalloc (see Nim issue #24816)".}
+
 import
   std/[os, osproc, parseopt,envvars,strutils,sharedtables,dynlib,times,strscans,locks,strtabs,streams,parsecfg],
   mummy, mummy/fileloggers,
@@ -12,6 +15,7 @@ type
     libModificationTime: Time
     libVersion: string
     requestProc: RequestProc
+    presetProc: PresetProc
     lock: Lock
     refCount: int
     cond: Cond
@@ -62,6 +66,7 @@ PHARAO_LOG_LEVEL             DEBUG                        Minimum level to log, 
 PHARAO_LOG_DATETIME_PATTERN  yyyy-MM-dd'T'HH:mm:sszzz     Nim datetime format pattern for log
 PHARAO_LOG_PATTERN           [$1 $2] $3                   Log format with $1 date, $2 level, $3 message
 PHARAO_MAX_BODY_LEN          134217728                    Maximum request body size in bytes (128 MB)
+PHARAO_ERROR_PAGE            error.nim                    Error page file, a filename cascades up to the web root, a path starting with / is fixed
 
 Option takes precedence before environment value from file before environment.
 
@@ -263,7 +268,177 @@ Option takes precedence before environment value from file before environment.
   proc logWrapper(level: LogLevel, message: cstring) {.gcsafe.} =
     log(level, $message)
 
-  proc initLibrary(route: var PharaoRoute, dynlibPath: string) =
+  ## error pages
+
+  proc statusReason(code: int): string =
+    case code
+    of 404: "Not Found"
+    of 500: "Internal Server Error"
+    of 503: "Service Unavailable"
+    else: "Error"
+
+  proc builtinPage(code: int, detail: string): string =
+    result = "$1 $2\n\n" % [$code, statusReason(code)]
+    if detail != "":
+      result.add detail & "\n\n"
+    result.add "pharao/" & NimblePkgVersion & "\n"
+
+  let errorPageEnv = byEnv("PHARAO_ERROR_PAGE", "")
+
+  # Resolve the error page for a request. A PHARAO_ERROR_PAGE starting
+  # with / is a fixed page anchored at the web root, a bare filename
+  # replaces error.nim and still cascades up to the web root.
+  proc resolveErrorPage(requestPath: string): string =
+    if errorPageEnv.startsWith("/"):
+      if fileExists(wwwRoot / errorPageEnv):
+        return errorPageEnv
+      debug("Configured error page $1 not found" % errorPageEnv)
+      return ""
+    let filename = if errorPageEnv == "": "error.nim" else: errorPageEnv
+    var dir = requestPath.parentDir
+    if dir == "":
+      dir = "/"
+    while true:
+      let candidate = dir / filename
+      if fileExists(wwwRoot / candidate):
+        return candidate
+      if dir == "/":
+        return ""
+      dir = dir.parentDir
+
+  var inErrorHandler {.threadvar.}: bool
+
+  var routes: SharedTable[string, PharaoRoute]
+  routes.init()
+
+  proc errorResponse(request: Request, code: int, detail: string)
+  proc initLibrary(route: var PharaoRoute, dynlibPath: string) {.gcsafe.}
+
+  # a checkout build compiles routes against its own sources: when the
+  # directory above the server binary contains pharao/lib.nim, put it on
+  # the nim path so no nimble install of pharao is needed
+  var nimPathArg = ""
+  let sourceRoot = getAppFilename().absolutePath.parentDir.parentDir
+  if fileExists(sourceRoot / "pharao/lib.nim"):
+    nimPathArg = "--path:" & sourceRoot
+
+  proc runRoute(request: Request, routePath: string,
+                presetCode: int, presetBody: string): tuple[ran: bool, detail: string] =
+    ## Run the route at routePath, compiling or reloading its dynlib first
+    ## if the source changed. Returns ran=false with a detail when compiling
+    ## or loading failed without responding.
+
+    # Avoid mgetOrPut here: it evaluates newPharaoRoute eagerly on
+    # every call, leaking a createShared chunk, a Lock and a Cond each
+    # time the key already exists. Look up first; only allocate+insert
+    # when the route is genuinely missing. A first-touch race may have two
+    # threads both insert; the loser's route leaks, but this happens at
+    # most once per path (vs every request before), so it is negligible.
+    var route: PharaoRoute = nil
+    routes.withValue(routePath, existing):
+      route = existing[]
+    if route.isNil:
+      route = newPharaoRoute(routePath)
+      routes[routePath] = route
+
+    route.lock.acquire
+
+    # wait for in-flight requests before recompiling
+    let versionStale = not route.libHandle.isNil and route.libVersion != NimblePkgVersion
+    let sourcePath = wwwRoot / routePath
+    if route.libModificationTime < sourcePath.getLastModificationTime or versionStale:
+      while route.refCount > 0:
+        route.cond.wait(route.lock)
+
+      let dynlibPath = dynlibRoot / routePath.parentDir / DynlibFormat % routePath.lastPathPart
+      createDir(dynlibPath.parentDir)
+
+      # unload previous program
+      if not route.libHandle.isNil:
+        let deinitProc = cast[DeinitProc](route.libHandle.symAddr("pharaoDeinit"))
+        if deinitProc.isNil:
+          error("dynamic library $1 has no pharaoDeinit, unloading without cleanup for path $2" % [dynlibPath, route.path])
+        else:
+          deinitProc()
+        route.libHandle.unloadLib
+        route.libHandle = nil
+      # useMalloc in both server and libraries, per Nim issue #24816: the
+      # default allocator segfaults when mummy worker threads foreign to a
+      # dynlib's runtime allocate inside it
+      let cmd = "$1 c $2 $3 --d:useMalloc --nimcache:$4 --app:lib --d:pharao.sourcePath=$5 --d:pharaoVersion=$6 -o:$7 -" % [nimCmd, nimArgs, nimPathArg, nimCachePath, sourcePath, NimblePkgVersion, dynlibPath]
+      var env = newStringTable()
+      for k, v in envPairs():
+        if k notin env:
+          env[k] = v
+      debug("Source change detected, compiling: $1" % nimCmd)
+      let (output, exitCode) = execCmdEx(cmd, input="include pharao/lib")
+      if exitCode == 0:
+        log(DebugLevel, output)
+      else:
+        route.lock.release
+        error(output)
+        return (false, output)
+      try:
+        debug("Loading $1" % dynlibPath)
+        route.initLibrary(dynlibPath)
+      except LibraryError as e:
+        if not route.libHandle.isNil:
+          route.libHandle.unloadLib
+          route.libHandle = nil
+        route.lock.release
+        error(e.msg)
+        return (false, e.msg)
+
+    # increment refcount before releasing lock and executing
+    inc route.refCount
+    route.lock.release
+
+    if presetCode > 0:
+      route.presetProc(presetCode.cint, presetBody.cstring, presetBody.len.cint)
+
+    try:
+      route.requestProc(request)
+    finally:
+      route.lock.acquire
+      dec route.refCount
+      route.cond.signal
+      route.lock.release
+
+    (true, "")
+
+  proc errorResponse(request: Request, code: int, detail: string) =
+    ## Respond via the configured error page with code and a builtin page
+    ## prefilled into it, falling back to the builtin page itself.
+    let detail = if code == 500 and not outputErrors: "" else: detail
+    let page = builtinPage(code, detail)
+    if inErrorHandler:
+      # the error page itself failed, respond builtin instead of recursing
+      request.respond(code, @{"Content-Type": "text/plain"}.HttpHeaders, page)
+      return
+    let errorRoutePath = resolveErrorPage(request.path)
+    if errorRoutePath == "":
+      request.respond(code, @{"Content-Type": "text/plain"}.HttpHeaders, page)
+      return
+    debug("Handling $1 with error page $2" % [$code, errorRoutePath])
+    inErrorHandler = true
+    try:
+      let (ran, errDetail) = runRoute(request, errorRoutePath, code, page)
+      if not ran and errDetail != "":
+        error(errDetail)
+    finally:
+      inErrorHandler = false
+    if not request.responded:
+      request.respond(code, @{"Content-Type": "text/plain"}.HttpHeaders, page)
+
+  # C-level wrapper for cross-dynlib boundary
+  proc errorWrapper(request: Request, code: cint,
+                    message: cstring, messageLen: cint) {.gcsafe.} =
+    var messageStr = newString(messageLen)
+    if messageLen > 0:
+      copyMem(addr messageStr[0], message, messageLen)
+    errorResponse(request, code.int, messageStr)
+
+  proc initLibrary(route: var PharaoRoute, dynlibPath: string) {.gcsafe.} =
     route.libHandle = loadLib(dynlibPath)
     if route.libHandle.isNil:
       raise newException(LibraryError, "dynamic library $1 could not be loaded for path" % [dynlibPath, route.path])
@@ -277,14 +452,15 @@ Option takes precedence before environment value from file before environment.
     if route.requestProc.isNil:
       raise newException(LibraryError, "dynamic library $1 has no pharaoRequest, not loading route for path $2" % [dynlibPath, route.path])
 
+    route.presetProc = cast[PresetProc](route.libHandle.symAddr("pharaoPreset"))
+    if route.presetProc.isNil:
+      raise newException(LibraryError, "dynamic library $1 has no pharaoPreset, not loading route for path $2" % [dynlibPath, route.path])
+
     let initProc = cast[InitProc](route.libHandle.symAddr("pharaoInit"))
     if initProc.isNil:
       raise newException(LibraryError, "dynamic library $1 has no pharaoInit, not loading route for path $2" % [dynlibPath, route.path])
-    initProc(respondWrapper, logWrapper, stdout, stderr, stdin)
+    initProc(respondWrapper, logWrapper, errorWrapper, stdout, stderr, stdin)
     route.libModificationTime = dynlibPath.getLastModificationTime
-
-  var routes: SharedTable[string, PharaoRoute]
-  routes.init()
 
   ## load existing dynlibs into routes on startup
   createDir(dynlibRoot)
@@ -299,7 +475,11 @@ Option takes precedence before environment value from file before environment.
         debug("Loading $1" % dynlibPath)
         route.initLibrary(dynlibPath)
       except LibraryError as e:
+        # broken or old protocol library, remove so the source recompiles
         error(e.msg)
+        if not route.libHandle.isNil:
+          route.libHandle.unloadLib
+        removeFile(dynlibPath)
         continue
       if route.libVersion != NimblePkgVersion:
         info("Removing stale library $1 (version $2, expected $3)" % [dynlibPath, route.libVersion, NimblePkgVersion])
@@ -310,84 +490,15 @@ Option takes precedence before environment value from file before environment.
       routes[path] = route
 
   proc handler(request: Request) =
-    let sourcePath = wwwRoot / request.path
-    let defaultHeaders = @{"Content-Type": "text/plain"}.HttpHeaders
-    if fileExists(sourcePath):
-
-      # Avoid mgetOrPut here: it evaluates newPharaoRoute eagerly on
-      # every call, leaking a createShared chunk, a Lock and a Cond each
-      # time the key already exists. Look up first; only allocate+insert
-      # when the route is genuinely missing. A first-touch race may have two
-      # threads both insert; the loser's route leaks, but this happens at
-      # most once per path (vs every request before), so it is negligible.
-      var route: PharaoRoute = nil
-      routes.withValue(request.path, existing):
-        route = existing[]
-      if route.isNil:
-        route = newPharaoRoute(request.path)
-        routes[request.path] = route
-
-      route.lock.acquire
-      
-      # wait for in-flight requests before recompiling
-      let versionStale = not route.libHandle.isNil and route.libVersion != NimblePkgVersion
-      if route.libModificationTime < sourcePath.getLastModificationTime or versionStale:
-        while route.refCount > 0:
-          route.cond.wait(route.lock)
-        
-        let dynlibPath = dynlibRoot / request.path.parentDir / DynlibFormat % request.path.lastPathPart
-        createDir(dynlibPath.parentDir)
-
-        # unload previous program
-        if not route.libHandle.isNil:
-          let deinitProc = cast[DeinitProc](route.libHandle.symAddr("pharaoDeinit"))
-          if deinitProc.isNil:
-            error("dynamic library $1 has no pharaoDeinit, unloading without cleanup for path $2" % [dynlibPath, route.path])
-          else:
-            deinitProc()
-          route.libHandle.unloadLib
-          route.libHandle = nil
-        let cmd = "$1 c $2 --nimcache:$3 --app:lib --d:pharao.sourcePath=$4 --d:pharaoVersion=$5 -o:$6 -" % [nimCmd, nimArgs, nimCachePath, sourcePath, NimblePkgVersion, dynlibPath]
-        var env = newStringTable()
-        for k, v in envPairs():
-          if k notin env:
-            env[k] = v
-        debug("Source change detected, compiling: $1" % nimCmd)
-        let (output, exitCode) = execCmdEx(cmd, input="include pharao/lib")
-        if exitCode == 0:
-          log(DebugLevel, output)
-        else:
-          route.lock.release
-          request.respond(500, defaultHeaders, if outputErrors: output else: "internal server error\n")
-          error(output)
-          return
-        try:
-          debug("Loading $1" % dynlibPath)
-          route.initLibrary(dynlibPath)
-        except LibraryError as e:
-          route.lock.release
-          request.respond(500, defaultHeaders, if outputErrors: e.msg else: "internal server error\n")
-          error(e.msg)
-          return
-      
-      # increment refcount before releasing lock and executing
-      inc route.refCount
-      route.lock.release
-      
-      try:
-        route.requestProc(request)
-      finally:
-        route.lock.acquire
-        dec route.refCount
-        route.cond.signal
-        route.lock.release
-      
-      if not request.responded:
+    if fileExists(wwwRoot / request.path):
+      let (ran, detail) = runRoute(request, request.path, 0, "")
+      if not ran:
+        errorResponse(request, 500, detail)
+      elif not request.responded:
         error("Internal error, no request response from $1" % request.path)
-        request.respond(503, defaultHeaders, "unavailable\n")
-
+        errorResponse(request, 503, "")
     else:
-      request.respond(404, defaultHeaders, "not found\n")
+      errorResponse(request, 404, "The requested path does not match any route in this web root.")
     info($request)
 
   let server = newServer(handler, maxBodyLen = maxBodyLen)
